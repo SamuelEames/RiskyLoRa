@@ -9,17 +9,23 @@
 #include <RH_RF95.h>					// LoRa Driver
 #include <RHEncryptedDriver.h>	// LoRa Encryption 
 #include <Speck.h>					// LoRa Encryption 
+#include "RiskyVars.h"				// Extra local variables
+#include <FastLED.h>					// Pixel LED
+#include <MFRC522.h>					// NFC Reader
 		
-
-// Uncomment to enable
-#define serialDubug
-// #define stationID
 
 
 // ARDUINO PIN SETUP
 #define RFM95_CS 		18
 #define RFM95_RST 	10
 #define RFM95_INT 	0
+
+#define LED_DATA 		6
+
+#define NFC_SS			19 			// 'SDA' Pin
+#define NFC_RST		20 			// Reset Pin
+
+
  
 
 // LORA SETUP
@@ -27,7 +33,7 @@
 
 RH_RF95 rf95(RFM95_CS, RFM95_INT);				// Instanciate a LoRa driver
 Speck myCipher;										// Instanciate a Speck block ciphering
-RHEncryptedDriver LoRa(rf95, myCipher);	// Instantiate the driver with those two
+RHEncryptedDriver LoRa(rf95, myCipher);		// Instantiate the driver with those two
 
 unsigned char encryptkey[16]={1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16}; // Encryption Key - keep secret ;)
 
@@ -35,17 +41,38 @@ char HWMessage[] = "Hello World ! I'm happy if you can read me";
 uint8_t HWMessageLen;
 
 
+// TAG READER SETUP
+MFRC522 mfrc522(NFC_SS, NFC_RST);				// Instanciate card reader driver
+MFRC522::StatusCode status;
+
+
+// PIXEL SETUP
+#define NUM_LEDS 			12
+CRGB leds[NUM_LEDS];									// Instanciate pixel driver
+
+
 void setup()
 {
-	HWMessageLen = strlen(HWMessage);
+	// PIXEL SETUP
+	FastLED.addLeds<WS2812B, LED_DATA, GRB>(leds, NUM_LEDS); 
+	FastLED.setMaxPowerInVoltsAndMilliamps(5,5); 						// Limit total power draw of LEDs to 200mA at 5V
+	fill_solid(leds, NUM_LEDS, COL_BLACK);
+	leds[0] = CRGB::Red;
+	FastLED.show();
+
 
 	// SERIAL SETUP
 	Serial.begin(115200);
-	while (!Serial) ; 							// Wait for serial port to be available
+	while (!Serial) ; 								// Wait for serial port to be available
 
 	Serial.println("LoRa Simple_Encrypted");
 
+	leds[1] = CRGB::Red;
+	FastLED.show();
+
 	// LORA SETUP
+	HWMessageLen = strlen(HWMessage);
+
 	if (!rf95.init())
 		Serial.println("LoRa init failed");
 	
@@ -60,11 +87,22 @@ void setup()
 	Serial.print("Max message length = ");
 	Serial.print(LoRa.maxMessageLength());
 
+
+	leds[2] = CRGB::Red;
+	FastLED.show();
+
 	// LoRa_TX();
 
 	// delay(5000);
 
 	// LoRa_TX();
+
+	// CARD READER SETUP
+	mfrc522.PCD_Init();					// Init MFRC522 reader
+
+	fill_solid(leds, NUM_LEDS, CRGB::Green);
+	FastLED.show();
+
 }
 
 void loop()
