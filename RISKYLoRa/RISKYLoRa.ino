@@ -20,10 +20,18 @@
 #define RFM95_RST 	10
 #define RFM95_INT 	0
 
-#define LED_DATA 		6
+#define BVOLT_PIN		A6				// Analog pin for battery voltage measurement
+#define BUZZ_PIN		5				// Buzzer
+#define LED_DATA 		6				// Pixel LED String
+
 
 #define NFC_SS			19 			// 'SDA' Pin
 #define NFC_RST		20 			// Reset Pin
+
+
+// BATTERY PARAMETERS
+#define LIPO_MINV  9600		//(mV) 9.6V - minimum voltage with a little safety factor
+#define LIPO_MAXV 12600 	//(mV) 12.6V - fully charged battery 
 
 
  
@@ -53,6 +61,9 @@ CRGB leds[NUM_LEDS];									// Instanciate pixel driver
 
 void setup()
 {
+	// VOLTAGE SENSOR SETUP
+
+
 	// PIXEL SETUP
 	FastLED.addLeds<WS2812B, LED_DATA, GRB>(leds, NUM_LEDS); 
 	FastLED.setMaxPowerInVoltsAndMilliamps(5,5); 						// Limit total power draw of LEDs to 200mA at 5V
@@ -80,7 +91,7 @@ void setup()
 	myCipher.setKey(encryptkey, sizeof(encryptkey));
 
 	Serial.println("Waiting for radio to setup");
-	delay(4000); 	// TODO - Why this delay?
+	delay(1000); 	// TODO - Why this delay?
 
 	Serial.println("Setup completed");
 
@@ -108,6 +119,10 @@ void setup()
 void loop()
 {
 	LoRa_RX();
+
+	getBattPercent();
+
+	delay(500);
 }
 
 
@@ -144,4 +159,41 @@ void LoRa_TX()
 	Serial.println((char *)&data);
 	
 	delay(4000);
+}
+
+
+
+
+uint8_t getBattPercent()
+{
+	/* Returns battery percent as a byte
+			* 0 = 0%, 255 = 100%
+			* Setup to monitor a 3C lipo (0V = 9V, 100% = 12.6V)
+			* Voltage sensor scales voltages down by a factor of 5 via voltage divider
+
+
+			FORMULAS
+			R1 = 30000.0;
+			R2 = 7500.0;
+			vout = (value * 5.0) / 1024.0;
+   		vin = vout / (R2/(R1+R2)); 
+
+   		I did some simplifying of the formulas
+	*/
+
+	// Calculate voltage in mV
+	uint16_t voltRAW_MV = analogRead(BVOLT_PIN) * 24.4140;
+
+	Serial.print("Battery voltage = ");
+	Serial.print(voltRAW_MV);
+	Serial.println(" mV");
+
+
+	if (voltRAW_MV <= LIPO_MINV)			// Flat battery
+		return 0;
+	else if (voltRAW_MV >= LIPO_MAXV)	// Full battery
+		return 255;
+	else											// Somewhere inbetween battery
+		return (uint8_t) ((voltRAW_MV - LIPO_MINV) / (float) (LIPO_MAXV - LIPO_MINV) * 255.0);
+
 }
