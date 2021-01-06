@@ -55,47 +55,16 @@ MFRC522 mfrc522(NFC_SS, NFC_RST);				// Instanciate card reader driver
 MFRC522::StatusCode status;
 
 #define ZERO 		0x00
-#define DATAROWS	16
+#define DATAROWS	12
 #define DATACOLS	4
+const uint8_t DATA_SIZE = DATAROWS * DATACOLS;
 
 // Data to write to tag is stored here
-uint8_t DataBlock_W[DATAROWS][DATACOLS] = { 	{ZERO, ZERO, ZERO, ZERO}, 
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO} 	};
-
+uint8_t DataBlock_W[DATA_SIZE];
 uint8_t *Ptr_DataBlock_W;
 
 // Data read from tag is stored here
-uint8_t DataBlock_R[DATAROWS][DATACOLS] = { 	{ZERO, ZERO, ZERO, ZERO}, 
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO},
-															{ZERO, ZERO, ZERO, ZERO} 	};
-
+uint8_t DataBlock_R[DATA_SIZE];
 uint8_t *Ptr_DataBlock_R;
 
 
@@ -154,6 +123,9 @@ void setup()
 	// CARD READER SETUP
 	mfrc522.PCD_Init();					// Init MFRC522 reader
 
+	Ptr_DataBlock_R = &DataBlock_R[0];	
+	Ptr_DataBlock_W = &DataBlock_W[0];	
+
 	fill_solid(leds, NUM_LEDS, CRGB::Green);
 	FastLED.show();
 
@@ -173,7 +145,28 @@ void loop()
 	if ( ! mfrc522.PICC_ReadCardSerial())
 		return;
 
-	ReadTagData();
+	// Check card type
+
+	uint8_t TagType = mfrc522.PICC_GetType(mfrc522.uid.sak);
+
+
+
+	Serial.println();
+
+	switch (TagType)
+	{
+		case mfrc522.PICC_TYPE_MIFARE_UL:			// NTAG
+			Read_NTAG_Data();
+			break;
+		case mfrc522.PICC_TYPE_MIFARE_1K:		
+			break;
+		default:
+			return;
+			break;
+	}
+
+
+	// 
 
 	// Respond to tag if it's part of game
 
@@ -258,19 +251,15 @@ uint8_t getBattPercent()
 
 
 
-void ReadTagData()
+void Read_NTAG_Data()
 {
 	// Read buffer from tag
-	const uint8_t readlen = 18;			// 16 bytes + 2x CRC bytes
-	unsigned char readBuffer[readlen];
-
-	unsigned char TagBuffer[32];		// Buffer to write data into
+	const uint8_t readlen = 18;				// 16 bytes + 2x CRC bytes
+	uint8_t readBuffer[readlen];
 	
 
-	Serial.print("Tag Data: \"");
-
 	// Read data from user section of tags
-	for (uint8_t ReadBlock = 0; ReadBlock < 2; ++ReadBlock)
+	for (uint8_t ReadBlock = 0; ReadBlock < (DATAROWS/4); ++ReadBlock)
 	{
 		// Get data from tag, starting from page 4 (user read/write section begins here)
 		status = mfrc522.MIFARE_Read(4 + (ReadBlock * 4), readBuffer, &readlen);
@@ -287,18 +276,32 @@ void ReadTagData()
 
 		// Record data from tag to TagBuffer array 
 		for (int i = 0; i < 16; ++i)
-			TagBuffer[i + ReadBlock * 16] = readBuffer[i];
+			DataBlock_R[i + ReadBlock * 16] = readBuffer[i];
 	}
 
 
-	// Print read data to console
-	for (uint8_t i = 0; i < 32; ++i)
+	PrintDataBlock(Ptr_DataBlock_R);
+
+	return;
+}
+
+
+void PrintDataBlock(uint8_t *buffer)
+{
+	// Print read data to console - HEX
+	Serial.print("Tag Data (HEX): ");
+	for (uint8_t i = 0; i < DATA_SIZE; ++i)
 	{
-		Serial.print(TagBuffer[i], HEX);
+		Serial.print(*(buffer + i), HEX);
 		Serial.print(" ");
-		// TagBufferTest[i] = TagBuffer[i];
 	}		
-		
+	Serial.println();
+
+
+	// Print read data to console - CHAR
+	Serial.print("Tag Data (CHAR): \"");
+	for (uint8_t i = 0; i < DATA_SIZE; ++i)
+		Serial.write(*(buffer + i));
 
 	Serial.println("\"");
 

@@ -183,6 +183,10 @@ void ReadTagData()
 			TagBuffer[i + ReadBlock * 16] = readBuffer[i];
 	}
 
+	// Record data for checks later
+	for (uint8_t i = 0; i < DATA_SIZE; ++i)
+		TagBufferTest[i] = TagBuffer[i];	
+
 
 /*	// Print read data to console - HEX
 	Serial.print("Tag Data (HEX): ");
@@ -190,7 +194,6 @@ void ReadTagData()
 	{
 		Serial.print(TagBuffer[i], HEX);
 		Serial.print(" ");
-		TagBufferTest[i] = TagBuffer[i];
 	}		
 	Serial.println();
 
@@ -198,10 +201,8 @@ void ReadTagData()
 	// Print read data to console - CHAR
 	Serial.print("Tag Data (CHAR): \"");
 	for (uint8_t i = 0; i < DATA_SIZE; ++i)
-	{
-		Serial.write(TagBuffer[i]);
-		TagBufferTest[i] = TagBuffer[i];
-	}		
+		Serial.write(TagBuffer[i]);	
+		
 	Serial.println("\"");*/
 
 	return;
