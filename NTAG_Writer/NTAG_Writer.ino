@@ -28,12 +28,10 @@ THE PROGRAM
 #include <MFRC522.h>
 
 
-#define zero 0x00
+#define ZERO 0x00
 #define DATAROWS	16
 #define DATACOLS	4
-
-
-
+const uint8_t DATA_SIZE = DATAROWS * DATACOLS;
 
 //////////////////////////////////
 //////// TAG READER SETUP ////////
@@ -49,31 +47,8 @@ MFRC522::StatusCode status;
 //////////////////////////////////
 
 // // Arrays copied onto NFC Tags
-// uint8_t DataBlock_0[] = {zero, zero, zero, zero};
-// uint8_t DataBlock_1[] = {zero, zero, zero, zero};
-// uint8_t DataBlock_2[] = {zero, zero, zero, zero};
-// uint8_t DataBlock_3[] = {zero, zero, zero, zero};
-// uint8_t DataBlock_4[] = {zero, zero, zero, zero};
-// uint8_t DataBlock_5[] = {zero, zero, zero, zero};
-// uint8_t DataBlock_6[] = {zero, zero, zero, zero};
-// uint8_t DataBlock_7[] = {zero, zero, zero, zero};
 
-uint8_t DataBlock[DATAROWS][DATACOLS] = { 	{zero, zero, zero, zero}, 
-															{zero, zero, zero, zero},
-															{zero, zero, zero, zero},
-															{zero, zero, zero, zero},
-															{zero, zero, zero, zero},
-															{zero, zero, zero, zero},
-															{zero, zero, zero, zero},
-															{zero, zero, zero, zero},
-															{zero, zero, zero, zero},
-															{zero, zero, zero, zero},
-															{zero, zero, zero, zero},
-															{zero, zero, zero, zero},
-															{zero, zero, zero, zero},
-															{zero, zero, zero, zero},
-															{zero, zero, zero, zero},
-															{zero, zero, zero, zero} 	};
+uint8_t DataBlock[DATA_SIZE];
 
 
 uint8_t *Ptr_DataBlock;
@@ -92,7 +67,7 @@ boolean readyToTag = false;			// True once newData is received. False after data
 void setup() 
 {
 
- 	Ptr_DataBlock = &DataBlock[0][0];		// Initialise pointer to first elelment of DataBlock
+ 	Ptr_DataBlock = &DataBlock[0];		// Initialise pointer to first elelment of DataBlock
 
 	Serial.begin(115200);				// Initialize serial communications
 	while (!Serial);						// Wait for serial port to open (needed for ATMEGA32U4)
@@ -124,7 +99,6 @@ void loop()
 		WriteTagData();
 		TestWrittenTag();
 
-		
 	}
 	else
 	{
@@ -140,13 +114,11 @@ void loop()
 
 void ClearData()
 {
-	// // Clears data arrays - sets all cells to equal zero
+	// // Clears data arrays - sets all cells to equal ZERO
 
-	for (uint8_t i = 0; i < DATAROWS; ++i)
-	{
-		for (uint8_t j = 0; j < DATACOLS; ++i)
-			DataBlock[i][j] = zero;
-	}
+	for (uint8_t i = 0; i < DATA_SIZE; ++i)
+		DataBlock[i] = ZERO;
+
 	return;
 }
 

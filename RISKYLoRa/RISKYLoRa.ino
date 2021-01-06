@@ -11,6 +11,7 @@
 #include <Speck.h>					// LoRa Encryption 
 #include "RiskyVars.h"				// Extra local variables
 #include <FastLED.h>					// Pixel LED
+#include <SPI.h>						// NFC Reader
 #include <MFRC522.h>					// NFC Reader
 		
 
@@ -30,8 +31,8 @@
 
 
 // BATTERY PARAMETERS
-#define LIPO_MINV  9600		//(mV) 9.6V - minimum voltage with a little safety factor
-#define LIPO_MAXV 12600 	//(mV) 12.6V - fully charged battery 
+#define LIPO_MINV  	9600		//(mV) 9.6V - minimum voltage with a little safety factor
+#define LIPO_MAXV 	12600 	//(mV) 12.6V - fully charged battery 
 
 
  
@@ -52,6 +53,51 @@ uint8_t HWMessageLen;
 // TAG READER SETUP
 MFRC522 mfrc522(NFC_SS, NFC_RST);				// Instanciate card reader driver
 MFRC522::StatusCode status;
+
+#define ZERO 		0x00
+#define DATAROWS	16
+#define DATACOLS	4
+
+// Data to write to tag is stored here
+uint8_t DataBlock_W[DATAROWS][DATACOLS] = { 	{ZERO, ZERO, ZERO, ZERO}, 
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO} 	};
+
+uint8_t *Ptr_DataBlock_W;
+
+// Data read from tag is stored here
+uint8_t DataBlock_R[DATAROWS][DATACOLS] = { 	{ZERO, ZERO, ZERO, ZERO}, 
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO},
+															{ZERO, ZERO, ZERO, ZERO} 	};
+
+uint8_t *Ptr_DataBlock_R;
+
 
 
 // PIXEL SETUP
@@ -117,7 +163,19 @@ void loop()
 {
 	LoRa_RX();
 
-	getBattPercent();
+	// getBattPercent();
+
+
+	// Look for new cards
+	if ( ! mfrc522.PICC_IsNewCardPresent())
+		return;
+	// Select one of the cards
+	if ( ! mfrc522.PICC_ReadCardSerial())
+		return;
+
+	ReadTagData();
+
+	// Respond to tag if it's part of game
 
 	delay(500);
 }
@@ -192,4 +250,57 @@ uint8_t getBattPercent()
 		return 255;
 	else											// Somewhere inbetween battery
 		return (uint8_t) ((voltRAW_MV - LIPO_MINV) / (float) (LIPO_MAXV - LIPO_MINV) * 255.0);
+}
+
+
+
+
+
+
+
+void ReadTagData()
+{
+	// Read buffer from tag
+	const uint8_t readlen = 18;			// 16 bytes + 2x CRC bytes
+	unsigned char readBuffer[readlen];
+
+	unsigned char TagBuffer[32];		// Buffer to write data into
+	
+
+	Serial.print("Tag Data: \"");
+
+	// Read data from user section of tags
+	for (uint8_t ReadBlock = 0; ReadBlock < 2; ++ReadBlock)
+	{
+		// Get data from tag, starting from page 4 (user read/write section begins here)
+		status = mfrc522.MIFARE_Read(4 + (ReadBlock * 4), readBuffer, &readlen);
+
+		// Check reading was successful
+		if (status != MFRC522::STATUS_OK) 
+		{
+			Serial.println("");
+			Serial.print(F("Reading failed: "));
+			Serial.println(mfrc522.GetStatusCodeName(status));
+
+			return;
+		}
+
+		// Record data from tag to TagBuffer array 
+		for (int i = 0; i < 16; ++i)
+			TagBuffer[i + ReadBlock * 16] = readBuffer[i];
+	}
+
+
+	// Print read data to console
+	for (uint8_t i = 0; i < 32; ++i)
+	{
+		Serial.print(TagBuffer[i], HEX);
+		Serial.print(" ");
+		// TagBufferTest[i] = TagBuffer[i];
+	}		
+		
+
+	Serial.println("\"");
+
+	return;
 }
