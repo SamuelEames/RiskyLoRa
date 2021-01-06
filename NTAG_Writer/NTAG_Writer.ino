@@ -1,18 +1,5 @@
-//This example show how you can get Authenticated by the NTAG213,215,216 by default the tags are unprotected in order to protect them we need to write 4 different values:
-// Using mfrc522.MIFARE_Ultralight_Write(PageNum, Data, #Datauint8_ts))
-//1.- we need to write the 32bit passWord to page 0xE5 !for ntag 213 and 215 page is different refer to nxp documentation!
-//2.- Now Write the 16 bits pACK to the page 0xE6 use the 2 high uint8_ts like this: pACKH + pACKL + 00 + 00 after an authentication the tag will return this secret uint8_ts
-//3.- Now we need to write the first page we want to protect this is a 1 uint8_t data in page 0xE3 we need to write 00 + 00 + 00 + firstPage  all pages after this one are write protected
-// Now WRITE protection is ACTIVATED so we need to get authenticated in order to write the last data
-//4.- Finally we need to write an access record in order to READ protect the card this step is optional only if you want to read protect also write 80 + 00 + 00 + 00 to 0xE4
-//After completeing all these steps you will nee to authentiate first in order to read or write ant page after the first page you selected to protect
-//To disengage proection just write the page (0xE3) to 00 + 00 + 00 + FF that going to remove all protection
-//Made by GARGANTUA from RoboCreators.com & paradoxalabs.com
-
-
-// Adapted by S.EAMES for a game using unprotected NTAG213 NFC Stickers
-// WRITER COMPONENT 
 /*
+Writes data to NFC tags
 
 THE PROGRAM
  * Connect serial
@@ -29,7 +16,7 @@ THE PROGRAM
 
 
 #define ZERO 0x00
-#define DATAROWS	16
+#define DATAROWS	12
 #define DATACOLS	4
 const uint8_t DATA_SIZE = DATAROWS * DATACOLS;
 
@@ -46,16 +33,13 @@ MFRC522::StatusCode status;
 ////////// VARIABLES /////////////
 //////////////////////////////////
 
-// // Arrays copied onto NFC Tags
+// // Array copied onto NFC Tags
 
 uint8_t DataBlock[DATA_SIZE];
-
-
 uint8_t *Ptr_DataBlock;
 
-const uint8_t InBufferLen = 32;		// Data read in from console is stored here
-char InBuffer[InBufferLen]; 			// Array to store text data from console
-char TagBufferTest[InBufferLen]; 	// Used to test tag data matches written data
+unsigned char InBuffer[DATA_SIZE]; 			// Array to store text data from console
+unsigned char TagBufferTest[DATA_SIZE]; 	// Used to test tag data matches written data
 boolean newData = false;				// False until newline chatacter is received fron console. Cleared once printed.
 boolean readyToTag = false;			// True once newData is received. False after data is written to tag
 
@@ -115,7 +99,6 @@ void loop()
 void ClearData()
 {
 	// // Clears data arrays - sets all cells to equal ZERO
-
 	for (uint8_t i = 0; i < DATA_SIZE; ++i)
 		DataBlock[i] = ZERO;
 
@@ -125,29 +108,9 @@ void ClearData()
 
 void FillDataBuffer()
 {
-
 	// Copies input data from console to DataBlock array (to later write to tag)
-	for (uint8_t i = 0; i < InBufferLen; ++i)
-	{
+	for (uint8_t i = 0; i < DATA_SIZE; ++i)
 		*(Ptr_DataBlock + i) = InBuffer[i];
-
-		// if (i<4)
-		// {
-		// 	Serial.print("Inbuffer  = ");
-		// 	Serial.print(InBuffer[i], HEX);
-		// 	Serial.print(", \t DataBlock = ");
-		// 	Serial.print(DataBlock[0][i], HEX);
-		// 	Serial.println();
-		// 	Serial.println();
-		// }
-	}
-
-	// // Print input buffer
-	// for (int i = 0; i < InBufferLen; ++i)
-	// {
-	// 	Serial.print("Inbuffer  = ");
-	// 	Serial.println(*(Ptr_DataBlock + i), HEX);
-	// }
 
 	return;
 }
@@ -156,27 +119,10 @@ void FillDataBuffer()
 void WriteTagData()
 {
 	//Writes DataBlock to TAG from page 4 (user r/w setion)
-
 	Serial.println("------------------------------------------------ Writing Data");
 	
-
 	for (uint8_t page = 0; page < DATAROWS; ++page)
-	{
-
 		mfrc522.MIFARE_Ultralight_Write(page + 0x04, (Ptr_DataBlock + (page * DATACOLS)), DATACOLS);
-
-		Serial.print("Page = ");
-		Serial.print(page + 0x04, HEX);
-		Serial.print(", \t DataWritten = ");
-		Serial.print(*(Ptr_DataBlock + (page * DATACOLS)), HEX);
-		Serial.print("\t");
-		Serial.print(*(Ptr_DataBlock + (page * DATACOLS) + 1), HEX);
-		Serial.print("\t");
-		Serial.print(*(Ptr_DataBlock + (page * DATACOLS) + 2), HEX);
-		Serial.print("\t");
-		Serial.print(*(Ptr_DataBlock + (page * DATACOLS) + 3), HEX);
-		Serial.println();
-	}
 	
 	return;
 }
@@ -185,9 +131,10 @@ void TestWrittenTag()
 {
 	ReadTagData();
 
-	// Compare buffers
+	// Compare data on tag with data just written to it
+	// This test can fail if tag was removed during an operation
 
-	for (uint8_t i = 0; i < InBufferLen; ++i)
+	for (uint8_t i = 0; i < DATA_SIZE; ++i)
 	{
 		if (InBuffer[i] != TagBufferTest[i])
 		{
@@ -210,17 +157,13 @@ void TestWrittenTag()
 void ReadTagData()
 {
 	// Read buffer from tag
-	const uint8_t readlen = 18;			// 16 bytes + 2x CRC bytes
+	const uint8_t readlen = 18;				// 16 bytes + 2x CRC bytes
 	unsigned char readBuffer[readlen];
-
-	unsigned char TagBuffer[32];		// Buffer to write data into
+	unsigned char TagBuffer[DATA_SIZE];		// Buffer to write data into
 	
 
-
-	Serial.print("Tag Data: \"");
-
 	// Read data from user section of tags
-	for (uint8_t ReadBlock = 0; ReadBlock < 2; ++ReadBlock)
+	for (uint8_t ReadBlock = 0; ReadBlock < (DATAROWS/4); ++ReadBlock)
 	{
 		// Get data from tag, starting from page 4 (user read/write section begins here)
 		status = mfrc522.MIFARE_Read(4 + (ReadBlock * 4), readBuffer, &readlen);
@@ -241,16 +184,25 @@ void ReadTagData()
 	}
 
 
-	// Print read data to console
-	for (uint8_t i = 0; i < 32; ++i)
+/*	// Print read data to console - HEX
+	Serial.print("Tag Data (HEX): ");
+	for (uint8_t i = 0; i < DATA_SIZE; ++i)
 	{
 		Serial.print(TagBuffer[i], HEX);
 		Serial.print(" ");
 		TagBufferTest[i] = TagBuffer[i];
 	}		
-		
+	Serial.println();
 
-	Serial.println("\"");
+
+	// Print read data to console - CHAR
+	Serial.print("Tag Data (CHAR): \"");
+	for (uint8_t i = 0; i < DATA_SIZE; ++i)
+	{
+		Serial.write(TagBuffer[i]);
+		TagBufferTest[i] = TagBuffer[i];
+	}		
+	Serial.println("\"");*/
 
 	return;
 }
@@ -274,17 +226,17 @@ void GetData()
 
 		if (rc != '\n')						// If not newline character
 		{
-			if (ndx < InBufferLen)
+			if (ndx < DATA_SIZE)
 			{
 				InBuffer[ndx] = rc;			// Save Char
 				ndx++;							// Increment index
-				if (ndx > InBufferLen) 		// Don't overflow buffer
-					ndx = InBufferLen - 1;
+				if (ndx > DATA_SIZE) 		// Don't overflow buffer
+					ndx = DATA_SIZE - 1;
 			}
 		}
 		else 										// Once we get end character
 		{
-			for (uint8_t i = ndx; i < InBufferLen; i++)
+			for (uint8_t i = ndx; i < DATA_SIZE; i++)
 				InBuffer[i] = ' ';			// Pad with spaces
 
 			ndx = 0;								// Reset variables
@@ -300,8 +252,8 @@ void PrintInBuffer()
 	if (newData == true) 
 	{
 		Serial.print("Data to write: \"");
-		for (int i = 0; i < InBufferLen; ++i)
-			Serial.print(InBuffer[i]);
+		for (int i = 0; i < DATA_SIZE; ++i)
+			Serial.write(InBuffer[i]);
 		Serial.println("\"");
 		
 		FillDataBuffer();
