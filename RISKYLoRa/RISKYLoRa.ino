@@ -55,15 +55,12 @@ MFRC522::StatusCode status;
 
 
 // PIXEL SETUP
-#define NUM_LEDS 			12
+#define NUM_LEDS 			24
 CRGB leds[NUM_LEDS];									// Instanciate pixel driver
 
 
 void setup()
 {
-	// VOLTAGE SENSOR SETUP
-
-
 	// PIXEL SETUP
 	FastLED.addLeds<WS2812B, LED_DATA, GRB>(leds, NUM_LEDS); 
 	FastLED.setMaxPowerInVoltsAndMilliamps(5,5); 						// Limit total power draw of LEDs to 200mA at 5V
@@ -195,5 +192,4 @@ uint8_t getBattPercent()
 		return 255;
 	else											// Somewhere inbetween battery
 		return (uint8_t) ((voltRAW_MV - LIPO_MINV) / (float) (LIPO_MAXV - LIPO_MINV) * 255.0);
-
 }
