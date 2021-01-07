@@ -67,6 +67,8 @@ uint8_t *Ptr_DataBlock_W;
 uint8_t DataBlock_R[DATA_SIZE];
 uint8_t *Ptr_DataBlock_R;
 
+MFRC522::MIFARE_Key key;							// Used with 1K cards
+
 
 
 // PIXEL SETUP
@@ -126,6 +128,10 @@ void setup()
 	Ptr_DataBlock_R = &DataBlock_R[0];	
 	Ptr_DataBlock_W = &DataBlock_W[0];	
 
+	// Prepare the key (used both as key A and as key B) for 1K cards
+	for (byte i = 0; i < 6; i++) 
+		key.keyByte[i] = 0xFF;
+
 	fill_solid(leds, NUM_LEDS, CRGB::Green);
 	FastLED.show();
 
@@ -138,37 +144,10 @@ void loop()
 	// getBattPercent();
 
 
-	// Look for new cards
-	if ( ! mfrc522.PICC_IsNewCardPresent())
-		return;
-	// Select one of the cards
-	if ( ! mfrc522.PICC_ReadCardSerial())
-		return;
-
-	// Check card type
-
-	uint8_t TagType = mfrc522.PICC_GetType(mfrc522.uid.sak);
+	CheckForCard();
 
 
 
-	Serial.println();
-
-	switch (TagType)
-	{
-		case mfrc522.PICC_TYPE_MIFARE_UL:			// NTAG
-			Read_NTAG_Data();
-			break;
-		case mfrc522.PICC_TYPE_MIFARE_1K:		
-			break;
-		default:
-			return;
-			break;
-	}
-
-
-	// 
-
-	// Respond to tag if it's part of game
 
 	delay(500);
 }
@@ -251,7 +230,7 @@ uint8_t getBattPercent()
 
 
 
-void Read_NTAG_Data()
+void Read_NTAG_Data()			// Used with PICC_TYPE_MIFARE_UL type
 {
 	// Read buffer from tag
 	const uint8_t readlen = 18;				// 16 bytes + 2x CRC bytes
@@ -286,6 +265,188 @@ void Read_NTAG_Data()
 }
 
 
+void Read_1KTAG_Data()				// Used with PICC_TYPE_MIFARE_1K type
+{
+	// Read buffer from tag
+	const uint8_t readlen = 18;
+	uint8_t readBuffer[readlen];
+	
+/*
+	// Read data from user section of tags
+	for (uint8_t ReadBlock = 0; ReadBlock < (DATAROWS/4); ++ReadBlock)
+	{
+		// Get data from tag, starting from page 4 (user read/write section begins here)
+		status = mfrc522.MIFARE_Read(4 + (ReadBlock * 4), readBuffer, &readlen);
+
+		// Check reading was successful
+		if (status != MFRC522::STATUS_OK) 
+		{
+			Serial.println("");
+			Serial.print(F("Reading failed: "));
+			Serial.println(mfrc522.GetStatusCodeName(status));
+
+			return;
+		}
+
+		// Record data from tag to TagBuffer array 
+		for (int i = 0; i < 16; ++i)
+			DataBlock_R[i + ReadBlock * 16] = readBuffer[i];
+	}*/
+
+
+	 // In this sample we use the second sector,
+	 // that is: sector #1, covering block #4 up to and including block #7
+	// uint8_t sector         = 1;
+	uint8_t blockAddr      = 4;
+	uint8_t trailerBlock   = 7;
+	// MFRC522::StatusCode status;
+	// uint8_t buffer[18];
+	// uint8_t size = sizeof(buffer);
+
+	// Authenticate using key A
+	// Serial.println(F("Authenticating using key A..."));
+	status = mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, trailerBlock, &key, &(mfrc522.uid));
+	if (status != MFRC522::STATUS_OK) 
+	{
+		// cardSuccess = 0;
+		// FirstScreenPass = true;
+		// onStartMillis = millis();
+		return;
+	}
+
+	for (uint8_t ReadBlock = 0; ReadBlock < (DATAROWS/8); ++ReadBlock)
+	{
+		// Get data from tag, starting from block 4 (user read/write section begins here)
+		// status = mfrc522.MIFARE_Read(4 + (ReadBlock * 4), readBuffer, &readlen);
+		status = mfrc522.MIFARE_Read(blockAddr + (ReadBlock * 4), readBuffer, &readlen);
+
+		// Check reading was successful
+		if (status != MFRC522::STATUS_OK) 
+		{
+			Serial.println("");
+			Serial.print(F("Reading failed: "));
+			Serial.println(mfrc522.GetStatusCodeName(status));
+
+			return;
+		}
+
+		// Record data from tag to TagBuffer array 
+		for (int i = 0; i < 16; ++i)
+			DataBlock_R[i + ReadBlock * 16] = readBuffer[i];
+	}
+
+	// Read data from the block
+	
+	// if (status != MFRC522::STATUS_OK) 
+	// {
+	// 	cardSuccess = 0;
+	// 	FirstScreenPass = true;
+	// 	onStartMillis = millis();
+
+	// 	return;
+	// }
+
+
+	// // TODO - DO I NEED TO DO THIS EXACT SAME THING AGAIN??? - SEE IF IT WORKS WITHOUT IT
+	// // Authenticate using key B --> NOTE: HAD TO CHANGE THIS TO 'A' for it to work on the cards I'm using
+	// // Serial.println("Authenticating again using key A..."); 
+	// status = (MFRC522::StatusCode) mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, trailerBlock, &key, &(mfrc522.uid));
+	// if (status != MFRC522::STATUS_OK) 
+	// {
+	// 	cardSuccess = 0;
+	// 	FirstScreenPass = true;
+	// 	onStartMillis = millis();
+	// 	return;
+	// }
+
+
+	// // Write data to the block
+	// copyBuffer(readBuffer, 16);
+
+
+	// if (StationType == ST_SCORE)
+	// 	extractTimes(dataBlock, 16);
+	// else
+	// 	recordTime();
+
+
+	// // Serial.print(F("Writing data into block ")); Serial.print(blockAddr);
+	// // Serial.println(F(" ..."));
+	// // dump_byte_array(dataBlock, 16); Serial.println();
+	// status = (MFRC522::StatusCode) mfrc522.MIFARE_Write(blockAddr, dataBlock, 16);
+	// if (status != MFRC522::STATUS_OK) 
+	// {
+	// 	// Serial.print(F("MIFARE_Write() failed: "));
+	// 	// Serial.println(mfrc522.GetStatusCodeName(status));
+	// 	cardSuccess = 0;
+	// 	FirstScreenPass = true;
+	// 	onStartMillis = millis();
+	// }
+	// Serial.println();
+
+	// // Read data from the block (again, should now be what we have written)
+	// status = (MFRC522::StatusCode) mfrc522.MIFARE_Read(blockAddr, readBuffer, &readlen);
+	// if (status != MFRC522::STATUS_OK) 
+	// {
+	// 	// Serial.print(F("MIFARE_Read() failed: "));
+	// 	Serial.println(mfrc522.GetStatusCodeName(status));
+	// 	cardSuccess = 0;
+	// 	FirstScreenPass = true;
+	// 	onStartMillis = millis();
+	// }
+
+
+	// // Check that data in block is what we have written
+	// // by counting the number of bytes that are equal
+	// // Serial.println(F("Checking result..."));
+	// uint8_t count = 0;
+	// for (byte i = 0; i < 16; i++) 
+	// {
+	// 	// Compare buffer (= what we've read) with dataBlock (= what we've written)
+	// 	if (readBuffer[i] == dataBlock[i])
+	// 		count++;
+	// }
+	// // Serial.print(F("Number of bytes that match = ")); Serial.println(count);
+	// if (count == 16) 
+	// {
+	// 	// Serial.println(F("Success :)"));
+	// 	cardSuccess = 1;
+	// 	FirstScreenPass = true;
+	// 	onStartMillis = millis();
+	// } 
+	// else 
+	// {
+	// 	// Serial.println(F("Failure, no match :("));
+	// 	// Serial.println(F("  perhaps the write didn't work properly..."));
+	// 	cardSuccess = 0;
+	// 	FirstScreenPass = true;
+	// 	onStartMillis = millis();
+	// }
+	// // Serial.println();
+
+
+	// Halt PICC
+	mfrc522.PICC_HaltA();
+	// Stop encryption on PCD
+	mfrc522.PCD_StopCrypto1();
+
+
+
+
+
+
+
+
+
+	PrintDataBlock(Ptr_DataBlock_R);
+
+	return;
+}
+
+
+
+
+
 void PrintDataBlock(uint8_t *buffer)
 {
 	// Print read data to console - HEX
@@ -306,4 +467,48 @@ void PrintDataBlock(uint8_t *buffer)
 	Serial.println("\"");
 
 	return;
+}
+
+
+
+void CheckForCard()
+{
+	// Reads card if present
+
+
+	// Look for new cards
+	if ( ! mfrc522.PICC_IsNewCardPresent())
+		return;
+	// Select one of the cards
+	if ( ! mfrc522.PICC_ReadCardSerial())
+		return;
+
+	// Check card type
+	uint8_t TagType = mfrc522.PICC_GetType(mfrc522.uid.sak);
+
+
+	switch (TagType)
+	{
+		case mfrc522.PICC_TYPE_MIFARE_UL:			// NTAG sticker
+			Read_NTAG_Data();
+			break;
+		case mfrc522.PICC_TYPE_MIFARE_1K:			// Card/fob type
+			Read_1KTAG_Data();
+			break;
+		default:
+			return;
+			break;
+	}
+
+
+
+
+
+
+
+
+	// 
+
+	// Respond to tag if it's part of game
+
 }
