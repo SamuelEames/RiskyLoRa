@@ -75,6 +75,9 @@ uint8_t readBuffer[readLen];			// Temporary buffer tag data is stored to during 
 #define START_BLOCK_ADDR 	0x04		// Initial block to read from (1K Cards)
 #define TRAILER_BLOCK   	0x07		// Used with 1K cards
 
+uint8_t NFC_State = READY_FOR_TAG;
+
+uint8_t validateCode[3] = {'C', '2', '1'};
 
 
 // PIXEL SETUP
@@ -150,7 +153,50 @@ void loop()
 	// getBattPercent();
 
 
-	CheckForCard();
+	if (status != MFRC522::STATUS_OK) 
+	{
+		Serial.print(F("\nNFC Fault: "));
+		Serial.println(mfrc522.GetStatusCodeName(status));
+
+		// Restart card sequence
+		NFC_State = READY_FOR_TAG;
+
+		// Retap card
+
+		// If we failed during writing, retap card
+			// Ensure UID is still the same
+			// Go straight back to writing what we last intended (don't recopy data from tag, in case it's wrong)
+
+	}
+
+
+
+	switch (NFC_State)
+	{
+		case READY_FOR_TAG:
+			ReadTag();
+			break;
+
+		case TAG_READ:
+			ValidateTag();
+			break;
+
+		case TAG_VALID:			// 
+			// ProcessTag();
+			break;
+
+		case WAIT_FOR_LORA:		// Possibly not required
+			// Animate LEDs with 'loading' sequence
+			break;
+
+		case WRITE_TO_CARD:
+			WriteTag();
+			break;
+
+		default:
+			break;
+	}
+	
 
 	// Process Data
 
@@ -238,12 +284,6 @@ uint8_t getBattPercent()
 		return (uint8_t) ((voltRAW_MV - LIPO_MINV) / (float) (LIPO_MAXV - LIPO_MINV) * 255.0);
 }
 
-
-
-
-
-
-
 void Read_NTAG_Data()			// Used with PICC_TYPE_MIFARE_UL type
 {
 	// Read data from user section of tags
@@ -275,9 +315,6 @@ void Write_NTAG_Data()				// Used with PICC_TYPE_MIFARE_UL type
 	for (uint8_t page = 0; page < DATAROWS; ++page)
 		mfrc522.MIFARE_Ultralight_Write(page + 0x04, (Ptr_DataBlock_W + (page * DATACOLS)), 16);
 
-	// for (uint8_t BlockNum = 0; BlockNum < (DATAROWS/8); ++BlockNum)
-	// 	status = mfrc522.MIFARE_Write(START_BLOCK_ADDR + (BlockNum * 4), (Ptr_DataBlock_W + (BlockNum * 16)), 16);
-	
 	// Check writing was successful
 	if (status != MFRC522::STATUS_OK) 
 	{
@@ -293,14 +330,8 @@ void Write_NTAG_Data()				// Used with PICC_TYPE_MIFARE_UL type
 
 	// TODO - add option here to reattempt card writing e.g. message to re-tap card
 
-	// Halt PICC - call once finished operations on current tag
-	mfrc522.PICC_HaltA();				// Instructs a PICC in state ACTIVE(*) to go to state HALT
-
 	return;
 }
-
-
-
 
 bool Auth_1KTAG(uint8_t BlockNum)
 {
@@ -316,7 +347,6 @@ bool Auth_1KTAG(uint8_t BlockNum)
 
 	return true;
 }
-
 
 void Read_1KTAG_Data()				// Used with PICC_TYPE_MIFARE_1K type
 {
@@ -366,14 +396,9 @@ void Write_1KTAG_Data()				// Used with PICC_TYPE_MIFARE_1K type
 	// Check written data is correct (e.g. may be wrong if card was removed during r/w operation)
 	Compare_RW_Buffers();
 
-	// Halt PICC
-	mfrc522.PICC_HaltA();				// Instructs a PICC in state ACTIVE(*) to go to state HALT
-	// Stop encryption on PCD
-	mfrc522.PCD_StopCrypto1();			// Call after communicating with the authenticated PICC
 
 	return;
 }
-
 
 bool Compare_RW_Buffers()
 {
@@ -389,7 +414,7 @@ bool Compare_RW_Buffers()
 	}
 	
 	Serial.print(F("Number of bytes that match = ")); 
-	Serial.println(count);
+	Serial.println(count, DEC);
 
 	if (count == DATA_SIZE) 
 	{
@@ -405,6 +430,13 @@ bool Compare_RW_Buffers()
 	return true;
 }
 
+void Copy_R2W_Buffer()
+{
+	// Copies DataBlock_R into DataBlock_W buffer
+	memcpy ( &DataBlock_W, &DataBlock_R, DATA_SIZE);
+
+	return;
+}
 
 void PrintDataBlock(uint8_t *buffer)
 {
@@ -428,13 +460,8 @@ void PrintDataBlock(uint8_t *buffer)
 	return;
 }
 
-
-
-void CheckForCard()
+void ReadTag()
 {
-	// Reads card if present
-
-
 	// Look for new cards
 	if ( ! mfrc522.PICC_IsNewCardPresent())
 		return;
@@ -442,39 +469,91 @@ void CheckForCard()
 	if ( ! mfrc522.PICC_ReadCardSerial())
 		return;
 
-	// Check card type
-	uint8_t TagType = mfrc522.PICC_GetType(mfrc522.uid.sak);
-
-
-	switch (TagType)
+	// Only read tags we're setup to process
+	switch (mfrc522.PICC_GetType(mfrc522.uid.sak))
 	{
 		case mfrc522.PICC_TYPE_MIFARE_UL:			// NTAG sticker
 			Read_NTAG_Data();
-			PrintDataBlock(Ptr_DataBlock_R);
-			Write_NTAG_Data();
 			break;
-		case mfrc522.PICC_TYPE_MIFARE_1K:			// Card/fob type
-			// Auth_1KTAG();
-			Read_1KTAG_Data();
-			PrintDataBlock(Ptr_DataBlock_R);
-			Write_1KTAG_Data();
-			return;
 
+		case mfrc522.PICC_TYPE_MIFARE_1K:			// Card/fob type
+			Read_1KTAG_Data();
 			break;
+
 		default:
 			return;
 			break;
 	}
 
 
+	// Indicate if read was successful
+	if (status == MFRC522::STATUS_OK) 
+		NFC_State = TAG_READ;
 
+	return;
+}
 
+void WriteTag()
+{
+	// Write DataBlock_W buffer to user memory on tags
+	// Only write tags we're setup to process
+	switch (mfrc522.PICC_GetType(mfrc522.uid.sak))
+	{
+		case mfrc522.PICC_TYPE_MIFARE_UL:			// NTAG sticker
+			Write_NTAG_Data();
+			break;
 
+		case mfrc522.PICC_TYPE_MIFARE_1K:			// Card/fob type
+			Write_1KTAG_Data();
+			break;
 
+		default:
+			break;
+	}
 
+	CloseTagComms();
 
-	// 
+	// TODO - enable re-write option if same tag is re-tapped after interrupted write (assuming it was read & validated)
 
-	// Respond to tag if it's part of game
+	return;
+}
 
+void CloseTagComms()
+{
+	// Puts tags into halt state
+
+	// Halt PICC - call once finished operations on current tag
+	mfrc522.PICC_HaltA();				// Instructs a PICC in state ACTIVE(*) to go to state HALT
+
+	// Stop encryption
+	if (mfrc522.PICC_GetType(mfrc522.uid.sak) == mfrc522.PICC_TYPE_MIFARE_1K)
+		mfrc522.PCD_StopCrypto1();		// Call after communicating with the authenticated PICC
+
+	if (status == MFRC522::STATUS_OK) 
+		NFC_State = READY_FOR_TAG;
+
+	return;
+}
+
+void ValidateTag()
+{
+	// Checks tag is part of ecosystem
+	// Included tags have "C21" in first three bytes of user data
+
+	if (memcmp(Ptr_DataBlock_R, validateCode, sizeof(validateCode)) == 0)
+	{
+		// Tag is valid
+		Serial.println(F("Tag Valid"));
+		NFC_State = WRITE_TO_CARD;
+		Copy_R2W_Buffer();
+	}
+	else
+	{
+		// Tag is invalid
+		CloseTagComms();
+		NFC_State = READY_FOR_TAG;
+		Serial.println(F("Tag invalid"));
+	}
+
+	return;
 }
