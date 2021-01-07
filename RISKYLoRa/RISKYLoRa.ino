@@ -59,15 +59,21 @@ MFRC522::StatusCode status;
 #define DATACOLS	4
 const uint8_t DATA_SIZE = DATAROWS * DATACOLS;
 
-// Data to write to tag is stored here
-uint8_t DataBlock_W[DATA_SIZE];
+
+uint8_t DataBlock_W[DATA_SIZE];		// Data to write to tag is stored here
 uint8_t *Ptr_DataBlock_W;
 
-// Data read from tag is stored here
-uint8_t DataBlock_R[DATA_SIZE];
+uint8_t DataBlock_R[DATA_SIZE];		// Data read from tag is stored here
 uint8_t *Ptr_DataBlock_R;
 
-MFRC522::MIFARE_Key key;							// Used with 1K cards
+MFRC522::MIFARE_Key key;				// Used with 1K cards
+
+const uint8_t readLen = 18;			// 16 bytes + 2x CRC bytes
+uint8_t readBuffer[readLen];			// Temporary buffer tag data is stored to during reading
+
+#define START_PAGE_ADDR  	0x04		// Initial page to read from (NTAG Stickers)
+#define START_BLOCK_ADDR 	0x04		// Initial block to read from (1K Cards)
+#define TRAILER_BLOCK   	0x07		// Used with 1K cards
 
 
 
@@ -90,7 +96,7 @@ void setup()
 	Serial.begin(115200);
 	while (!Serial) ; 								// Wait for serial port to be available
 
-	Serial.println("LoRa Simple_Encrypted");
+	Serial.println(F("LoRa Simple_Encrypted"));
 
 	leds[1] = CRGB::Red;
 	FastLED.show();
@@ -99,17 +105,17 @@ void setup()
 	HWMessageLen = strlen(HWMessage);
 
 	if (!rf95.init())
-		Serial.println("LoRa init failed");
+		Serial.println(F("LoRa init failed"));
 	
 	rf95.setTxPower(13); 							// Setup Power,dBm
 	myCipher.setKey(encryptkey, sizeof(encryptkey));
 
-	Serial.println("Waiting for radio to setup");
+	Serial.println(F("Waiting for radio to setup"));
 	delay(1000); 	// TODO - Why this delay?
 
-	Serial.println("Setup completed");
+	Serial.println(F("Setup completed"));
 
-	Serial.print("Max message length = ");
+	Serial.print(F("Max message length = "));
 	Serial.print(LoRa.maxMessageLength());
 
 
@@ -146,6 +152,14 @@ void loop()
 
 	CheckForCard();
 
+	// Process Data
+
+	// Write to Card
+
+	// Check written data
+
+	// Re-attempt write
+
 
 
 
@@ -164,12 +178,12 @@ void LoRa_RX()
 
 		if (LoRa.recv(buf, &len)) 
 		{
-			Serial.print("Received: ");
+			Serial.print(F("Received: "));
 			Serial.println((char *)&buf);
 		}
 		else
 		{
-			Serial.println("recv failed");
+			Serial.println(F("recv failed"));
 		}
 	}
 }
@@ -181,7 +195,7 @@ void LoRa_TX()
 
 	LoRa.send(data, sizeof(data)); // Send out ID + Sensor data to LoRa gateway
 
-	Serial.print("Sent: ");
+	Serial.print(F("Sent: "));
 
 	Serial.println((char *)&data);
 	
@@ -211,9 +225,9 @@ uint8_t getBattPercent()
 	// Calculate voltage in mV
 	uint16_t voltRAW_MV = analogRead(BVOLT_PIN) * 24.4140;
 
-	Serial.print("Battery voltage = ");
+	Serial.print(F("Battery voltage = "));
 	Serial.print(voltRAW_MV);
-	Serial.println(" mV");
+	Serial.println(F(" mV"));
 
 
 	if (voltRAW_MV <= LIPO_MINV)			// Flat battery
@@ -232,239 +246,157 @@ uint8_t getBattPercent()
 
 void Read_NTAG_Data()			// Used with PICC_TYPE_MIFARE_UL type
 {
-	// Read buffer from tag
-	const uint8_t readlen = 18;				// 16 bytes + 2x CRC bytes
-	uint8_t readBuffer[readlen];
-	
-
+	Serial.println(F("Reading NTAG"));
 	// Read data from user section of tags
-	for (uint8_t ReadBlock = 0; ReadBlock < (DATAROWS/4); ++ReadBlock)
+	for (uint8_t BlockNum = 0; BlockNum < (DATAROWS/4); ++BlockNum)
 	{
 		// Get data from tag, starting from page 4 (user read/write section begins here)
-		status = mfrc522.MIFARE_Read(4 + (ReadBlock * 4), readBuffer, &readlen);
+		status = mfrc522.MIFARE_Read(START_PAGE_ADDR + (BlockNum * 4), readBuffer, &readLen);
 
 		// Check reading was successful
 		if (status != MFRC522::STATUS_OK) 
 		{
-			Serial.println("");
-			Serial.print(F("Reading failed: "));
+			Serial.print(F("\nReading failed: "));
 			Serial.println(mfrc522.GetStatusCodeName(status));
-
 			return;
 		}
 
-		// Record data from tag to TagBuffer array 
+		// Record data from tag to DataBlock_R array 
 		for (int i = 0; i < 16; ++i)
-			DataBlock_R[i + ReadBlock * 16] = readBuffer[i];
+			DataBlock_R[i + BlockNum * 16] = readBuffer[i];
 	}
 
 
-	PrintDataBlock(Ptr_DataBlock_R);
+	// Halt PICC - call once finished operations on current tag
+	mfrc522.PICC_HaltA();				// Instructs a PICC in state ACTIVE(*) to go to state HALT
+
 
 	return;
+}
+
+
+bool Auth_1KTAG(uint8_t BlockNum)
+{
+	// Authenticates BlockNum of current tag - used with 1K cards
+	// Authenticate using key A. Return 'true' for success and 'false' for fail
+	status = mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, TRAILER_BLOCK + (BlockNum * 4), &key, &(mfrc522.uid));
+	if (status != MFRC522::STATUS_OK) 
+	{
+		Serial.print(F("\nPCD_Authenticate() failed: "));
+		Serial.println(mfrc522.GetStatusCodeName(status));
+		return false;
+	}
+
+	return true;
 }
 
 
 void Read_1KTAG_Data()				// Used with PICC_TYPE_MIFARE_1K type
 {
-	// Read buffer from tag
-	const uint8_t readlen = 18;
-	uint8_t readBuffer[readlen];
-	
-/*
-	// Read data from user section of tags
-	for (uint8_t ReadBlock = 0; ReadBlock < (DATAROWS/4); ++ReadBlock)
+	for (uint8_t BlockNum = 0; BlockNum < (DATAROWS/8); ++BlockNum)
 	{
-		// Get data from tag, starting from page 4 (user read/write section begins here)
-		status = mfrc522.MIFARE_Read(4 + (ReadBlock * 4), readBuffer, &readlen);
+		// Authenticate current working block
+		if(!Auth_1KTAG(BlockNum))
+			return;
+
+		// Get data from tag, starting from block 4 (user read/write section begins here)
+		status = mfrc522.MIFARE_Read(START_BLOCK_ADDR + (BlockNum * 4), readBuffer, &readLen);
 
 		// Check reading was successful
 		if (status != MFRC522::STATUS_OK) 
 		{
-			Serial.println("");
-			Serial.print(F("Reading failed: "));
+			Serial.print(F("\nReading failed: "));
 			Serial.println(mfrc522.GetStatusCodeName(status));
-
 			return;
 		}
 
-		// Record data from tag to TagBuffer array 
-		for (int i = 0; i < 16; ++i)
-			DataBlock_R[i + ReadBlock * 16] = readBuffer[i];
-	}*/
+		// Record data from tag to DataBlock_R array 
+		for (uint8_t i = 0; i < 16; ++i)
+			DataBlock_R[i + BlockNum * 16] = readBuffer[i];
+	}
 
+	return;
+}
 
-	 // In this sample we use the second sector,
-	 // that is: sector #1, covering block #4 up to and including block #7
-	// uint8_t sector         = 1;
-	uint8_t blockAddr      = 4;
-	uint8_t trailerBlock   = 7;
-	// MFRC522::StatusCode status;
-	// uint8_t buffer[18];
-	// uint8_t size = sizeof(buffer);
+void Write_1KTAG_Data()				// Used with PICC_TYPE_MIFARE_1K type
+{
+	// Writes DataBlock_W buffer to tag user memory
+	// NOTE: ensure sectors used have been authenticated
 
-	// Authenticate using key A
-	// Serial.println(F("Authenticating using key A..."));
-	status = mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, trailerBlock, &key, &(mfrc522.uid));
+	for (uint8_t BlockNum = 0; BlockNum < (DATAROWS/8); ++BlockNum)
+		status = mfrc522.MIFARE_Write(START_BLOCK_ADDR + (BlockNum * 4), (Ptr_DataBlock_W + (BlockNum * 16)), 16);
+	
+	// Check writing was successful
 	if (status != MFRC522::STATUS_OK) 
 	{
-		// cardSuccess = 0;
-		// FirstScreenPass = true;
-		// onStartMillis = millis();
-		return;
+		Serial.print(F("\nMIFARE_Write() failed: "));
+		Serial.println(mfrc522.GetStatusCodeName(status));
 	}
 
-	for (uint8_t ReadBlock = 0; ReadBlock < (DATAROWS/8); ++ReadBlock)
-	{
-		// Get data from tag, starting from block 4 (user read/write section begins here)
-		// status = mfrc522.MIFARE_Read(4 + (ReadBlock * 4), readBuffer, &readlen);
-		status = mfrc522.MIFARE_Read(blockAddr + (ReadBlock * 4), readBuffer, &readlen);
+	// Read data from the block (again, should now be what we have written)
+	Read_1KTAG_Data();
 
-		// Check reading was successful
-		if (status != MFRC522::STATUS_OK) 
-		{
-			Serial.println("");
-			Serial.print(F("Reading failed: "));
-			Serial.println(mfrc522.GetStatusCodeName(status));
-
-			return;
-		}
-
-		// Record data from tag to TagBuffer array 
-		for (int i = 0; i < 16; ++i)
-			DataBlock_R[i + ReadBlock * 16] = readBuffer[i];
-	}
-
-	// Read data from the block
-	
-	// if (status != MFRC522::STATUS_OK) 
-	// {
-	// 	cardSuccess = 0;
-	// 	FirstScreenPass = true;
-	// 	onStartMillis = millis();
-
-	// 	return;
-	// }
-
-
-	// // TODO - DO I NEED TO DO THIS EXACT SAME THING AGAIN??? - SEE IF IT WORKS WITHOUT IT
-	// // Authenticate using key B --> NOTE: HAD TO CHANGE THIS TO 'A' for it to work on the cards I'm using
-	// // Serial.println("Authenticating again using key A..."); 
-	// status = (MFRC522::StatusCode) mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, trailerBlock, &key, &(mfrc522.uid));
-	// if (status != MFRC522::STATUS_OK) 
-	// {
-	// 	cardSuccess = 0;
-	// 	FirstScreenPass = true;
-	// 	onStartMillis = millis();
-	// 	return;
-	// }
-
-
-	// // Write data to the block
-	// copyBuffer(readBuffer, 16);
-
-
-	// if (StationType == ST_SCORE)
-	// 	extractTimes(dataBlock, 16);
-	// else
-	// 	recordTime();
-
-
-	// // Serial.print(F("Writing data into block ")); Serial.print(blockAddr);
-	// // Serial.println(F(" ..."));
-	// // dump_byte_array(dataBlock, 16); Serial.println();
-	// status = (MFRC522::StatusCode) mfrc522.MIFARE_Write(blockAddr, dataBlock, 16);
-	// if (status != MFRC522::STATUS_OK) 
-	// {
-	// 	// Serial.print(F("MIFARE_Write() failed: "));
-	// 	// Serial.println(mfrc522.GetStatusCodeName(status));
-	// 	cardSuccess = 0;
-	// 	FirstScreenPass = true;
-	// 	onStartMillis = millis();
-	// }
-	// Serial.println();
-
-	// // Read data from the block (again, should now be what we have written)
-	// status = (MFRC522::StatusCode) mfrc522.MIFARE_Read(blockAddr, readBuffer, &readlen);
-	// if (status != MFRC522::STATUS_OK) 
-	// {
-	// 	// Serial.print(F("MIFARE_Read() failed: "));
-	// 	Serial.println(mfrc522.GetStatusCodeName(status));
-	// 	cardSuccess = 0;
-	// 	FirstScreenPass = true;
-	// 	onStartMillis = millis();
-	// }
-
-
-	// // Check that data in block is what we have written
-	// // by counting the number of bytes that are equal
-	// // Serial.println(F("Checking result..."));
-	// uint8_t count = 0;
-	// for (byte i = 0; i < 16; i++) 
-	// {
-	// 	// Compare buffer (= what we've read) with dataBlock (= what we've written)
-	// 	if (readBuffer[i] == dataBlock[i])
-	// 		count++;
-	// }
-	// // Serial.print(F("Number of bytes that match = ")); Serial.println(count);
-	// if (count == 16) 
-	// {
-	// 	// Serial.println(F("Success :)"));
-	// 	cardSuccess = 1;
-	// 	FirstScreenPass = true;
-	// 	onStartMillis = millis();
-	// } 
-	// else 
-	// {
-	// 	// Serial.println(F("Failure, no match :("));
-	// 	// Serial.println(F("  perhaps the write didn't work properly..."));
-	// 	cardSuccess = 0;
-	// 	FirstScreenPass = true;
-	// 	onStartMillis = millis();
-	// }
-	// // Serial.println();
-
+	// Check written data is correct (e.g. may be wrong if card was removed during r/w operation)
+	Compare_RW_Buffers();
 
 	// Halt PICC
-	mfrc522.PICC_HaltA();
+	mfrc522.PICC_HaltA();				// Instructs a PICC in state ACTIVE(*) to go to state HALT
 	// Stop encryption on PCD
-	mfrc522.PCD_StopCrypto1();
-
-
-
-
-
-
-
-
-
-	PrintDataBlock(Ptr_DataBlock_R);
+	mfrc522.PCD_StopCrypto1();			// Call after communicating with the authenticated PICC
 
 	return;
 }
 
 
+bool Compare_RW_Buffers()
+{
+	// Check that data in block is what we have written
+	// by counting the number of bytes that are equal
+	// Serial.println(F("Checking result..."));
+	uint8_t count = 0;
+	for (uint8_t i = 0; i < DATA_SIZE; i++) 
+	{
+		// Compare buffer (= what we've read) with dataBlock (= what we've written)
+		if (DataBlock_W[i] == DataBlock_R[i])
+			count++;
+	}
+	
+	Serial.print(F("Number of bytes that match = ")); 
+	Serial.println(count);
 
+	if (count == DATA_SIZE) 
+	{
+		Serial.println(F("Success :)"));
+	} 
+	else 
+	{
+		Serial.println(F("Failure, no match :("));
+		Serial.println(F("  perhaps the write didn't work properly..."));
+		return false;
+	}
+
+	return true;
+}
 
 
 void PrintDataBlock(uint8_t *buffer)
 {
 	// Print read data to console - HEX
-	Serial.print("Tag Data (HEX): ");
+	Serial.print(F("Tag Data (HEX): "));
 	for (uint8_t i = 0; i < DATA_SIZE; ++i)
 	{
 		Serial.print(*(buffer + i), HEX);
-		Serial.print(" ");
+		Serial.print(F(" "));
 	}		
 	Serial.println();
 
 
 	// Print read data to console - CHAR
-	Serial.print("Tag Data (CHAR): \"");
+	Serial.print(F("Tag Data (CHAR): \""));
 	for (uint8_t i = 0; i < DATA_SIZE; ++i)
 		Serial.write(*(buffer + i));
 
-	Serial.println("\"");
+	Serial.println(F("\""));
 
 	return;
 }
@@ -491,9 +423,15 @@ void CheckForCard()
 	{
 		case mfrc522.PICC_TYPE_MIFARE_UL:			// NTAG sticker
 			Read_NTAG_Data();
+			PrintDataBlock(Ptr_DataBlock_R);
 			break;
 		case mfrc522.PICC_TYPE_MIFARE_1K:			// Card/fob type
-			Read_1KTAG_Data();
+				// Auth_1KTAG();
+				Read_1KTAG_Data();
+				PrintDataBlock(Ptr_DataBlock_R);
+				Write_1KTAG_Data();
+				return;
+
 			break;
 		default:
 			return;
