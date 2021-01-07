@@ -246,7 +246,6 @@ uint8_t getBattPercent()
 
 void Read_NTAG_Data()			// Used with PICC_TYPE_MIFARE_UL type
 {
-	Serial.println(F("Reading NTAG"));
 	// Read data from user section of tags
 	for (uint8_t BlockNum = 0; BlockNum < (DATAROWS/4); ++BlockNum)
 	{
@@ -266,13 +265,41 @@ void Read_NTAG_Data()			// Used with PICC_TYPE_MIFARE_UL type
 			DataBlock_R[i + BlockNum * 16] = readBuffer[i];
 	}
 
+	return;
+}
+
+void Write_NTAG_Data()				// Used with PICC_TYPE_MIFARE_UL type
+{
+	// Writes DataBlock_W buffer to tag user memory
+
+	for (uint8_t page = 0; page < DATAROWS; ++page)
+		mfrc522.MIFARE_Ultralight_Write(page + 0x04, (Ptr_DataBlock_W + (page * DATACOLS)), 16);
+
+	// for (uint8_t BlockNum = 0; BlockNum < (DATAROWS/8); ++BlockNum)
+	// 	status = mfrc522.MIFARE_Write(START_BLOCK_ADDR + (BlockNum * 4), (Ptr_DataBlock_W + (BlockNum * 16)), 16);
+	
+	// Check writing was successful
+	if (status != MFRC522::STATUS_OK) 
+	{
+		Serial.print(F("\nMIFARE_Write() failed: "));
+		Serial.println(mfrc522.GetStatusCodeName(status));
+	}
+
+	// Read data from the block (again, should now be what we have written)
+	Read_NTAG_Data();
+
+	// Check written data is correct (e.g. may be wrong if card was removed during r/w operation)
+	Compare_RW_Buffers();
+
+	// TODO - add option here to reattempt card writing e.g. message to re-tap card
 
 	// Halt PICC - call once finished operations on current tag
 	mfrc522.PICC_HaltA();				// Instructs a PICC in state ACTIVE(*) to go to state HALT
 
-
 	return;
 }
+
+
 
 
 bool Auth_1KTAG(uint8_t BlockNum)
@@ -424,13 +451,14 @@ void CheckForCard()
 		case mfrc522.PICC_TYPE_MIFARE_UL:			// NTAG sticker
 			Read_NTAG_Data();
 			PrintDataBlock(Ptr_DataBlock_R);
+			Write_NTAG_Data();
 			break;
 		case mfrc522.PICC_TYPE_MIFARE_1K:			// Card/fob type
-				// Auth_1KTAG();
-				Read_1KTAG_Data();
-				PrintDataBlock(Ptr_DataBlock_R);
-				Write_1KTAG_Data();
-				return;
+			// Auth_1KTAG();
+			Read_1KTAG_Data();
+			PrintDataBlock(Ptr_DataBlock_R);
+			Write_1KTAG_Data();
+			return;
 
 			break;
 		default:
