@@ -13,6 +13,7 @@
 #include <FastLED.h>					// Pixel LED
 #include <SPI.h>						// NFC Reader
 #include <MFRC522.h>					// NFC Reader
+#include <EEPROM.h>					// EEPROM used to store (this) station ID
 		
 
 
@@ -37,17 +38,6 @@
 
  
 
-// LORA SETUP
-#define RF95_FREQ 915.0
-
-RH_RF95 rf95(RFM95_CS, RFM95_INT);				// Instanciate a LoRa driver
-Speck myCipher;										// Instanciate a Speck block ciphering
-RHEncryptedDriver LoRa(rf95, myCipher);		// Instantiate the driver with those two
-
-uint8_t encryptkey[16]={1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16}; // Encryption Key - keep secret ;)
-
-char HWMessage[] = "Hello World ! I'm happy if you can read me";
-uint8_t HWMessageLen;
 
 
 // TAG READER SETUP
@@ -57,13 +47,13 @@ MFRC522::StatusCode status;
 #define ZERO 		0x00
 #define DATAROWS	12
 #define DATACOLS	4
-const uint8_t DATA_SIZE = DATAROWS * DATACOLS;
+const uint8_t TAG_DATA_SIZE = DATAROWS * DATACOLS;
 
 
-uint8_t DataBlock_W[DATA_SIZE];		// Data to write to tag is stored here
+uint8_t DataBlock_W[TAG_DATA_SIZE];		// Data to write to tag is stored here
 uint8_t *Ptr_DataBlock_W;
 
-uint8_t DataBlock_R[DATA_SIZE];		// Data read from tag is stored here
+uint8_t DataBlock_R[TAG_DATA_SIZE];		// Data read from tag is stored here
 uint8_t *Ptr_DataBlock_R;
 
 MFRC522::MIFARE_Key key;				// Used with 1K cards
@@ -84,11 +74,44 @@ uint8_t validateCode[3] = {'C', '2', '1'};
 uint8_t UID_Log[MAX_UID_LEN * NUM_LOGGED_UIDS];	// Stores the UIDs of the last NUM_LOGGED_UIDS cards logged
 uint8_t lastUIDRow = 0;									// Row into which UID of last valid tag was stored
 
-bool TagReTapped = false;				// True if same tag was tapped twice in a row
 
 // PIXEL SETUP
 #define NUM_LEDS 			24
 CRGB leds[NUM_LEDS];									// Instanciate pixel driver
+
+
+
+
+// LORA SETUP
+#define RF95_FREQ 915.0
+
+RH_RF95 rf95(RFM95_CS, RFM95_INT);				// Instanciate a LoRa driver
+Speck myCipher;										// Instanciate a Speck block ciphering
+RHEncryptedDriver LoRa(rf95, myCipher);		// Instantiate the driver with those two
+
+uint8_t encryptkey[16]={1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16}; // Encryption Key - keep secret ;)
+
+char HWMessage[] = "Hello World ! I'm happy if you can read me";
+uint8_t HWMessageLen;
+
+// Holds destination Station ID, [this] Station ID, battery %, other?
+#define STATION_DATA_LEN 5
+// uint8_t StationData[STATION_DATA_LEN]; // don't even need this because data is saved straight into LoRa_TX_Buffer
+// STATION DATA MAP
+// 	[0] This station ID (set in Setup function from EEPROM data)
+// 	[1] Destination Station ID
+//		[2] Current State / Message type
+// 	[3] Batt %	(set in TX function)
+// 	[4] Spare?? ... I'll think of something 
+
+const uint8_t LORA_BUFF_LEN = STATION_DATA_LEN + MAX_UID_LEN + TAG_DATA_SIZE; // NOTE: ensure this isn't greater than LoRa.maxMessageLength() = 239 bytes
+
+uint8_t LoRa_TX_Buffer[LORA_BUFF_LEN]; 		// Buffer to transmit over LoRa
+uint8_t LoRa_RX_Buffer[LORA_BUFF_LEN];			// Data recieved from LoRa stored here
+
+#define MASTER_ID 0x01								// ID of master station
+
+
 
 
 void setup()
@@ -125,7 +148,13 @@ void setup()
 	Serial.println(F("Setup completed"));
 
 	Serial.print(F("Max message length = "));
-	Serial.print(LoRa.maxMessageLength());
+	Serial.println(LoRa.maxMessageLength());
+
+	// Read thid stationID - recorded to EEPROM beforehand
+	LoRa_TX_Buffer[0] = EEPROM.read(0);
+
+	// Set destination for LoRa message (we'll only be sending to master station)
+	LoRa_TX_Buffer[1] = MASTER_ID; 
 
 
 	leds[2] = CRGB::Red;
@@ -173,29 +202,40 @@ void loop()
 			// Ensure UID is still the same
 			// Go straight back to writing what we last intended (don't recopy data from tag, in case it's wrong)
 
+		// TODO - Reset card reader if fault is "A buffer is not big enough."
+
+
 	}
 
 
 
 	switch (NFC_State)
 	{
-		case READY_FOR_TAG:
+		case READY_FOR_TAG:		// Step 1 - wait for tag to be tapped
 			ReadTag();
 			break;
 
-		case TAG_READ:
+		case TAG_READ:				// Step 2 - Check tag is part of game
 			ValidateTag();
 			break;
 
-		case TAG_VALID:			// 
+		case TAG_VALID:			// Step 3 - Check if new tag, or re-tapped card
+			CheckUID();
+			break;
+
+		case TAG_RETAPPED:		// Step 3.5 - If retapped card, complete write operation (TODO only if reading & processing was completed)
+			WriteTag();
+			break;
+
+		case TAG_NEW:				// Step 4 - Process data & transmit over LoRa to game computer
 			ProcessTag();
 			break;
 
-		case WAIT_FOR_LORA:		// Possibly not required
+		case WAIT_FOR_LORA:		// Step 5 - Wait for LoRa response from game computer
 			// Animate LEDs with 'loading' sequence
 			break;
 
-		case WRITE_TO_CARD:
+		case WRITE_TO_CARD:		// Step 6 - Write updated data to tag 🥳
 			WriteTag();
 			break;
 
@@ -225,13 +265,26 @@ void LoRa_RX()
 	if (LoRa.available())
 	{
 		// Should be a message for us now   
-		uint8_t buf[LoRa.maxMessageLength()];
-		uint8_t len = sizeof(buf);
+		// uint8_t buf[LoRa.maxMessageLength()];
+		// uint8_t len = sizeof(buf);
 
-		if (LoRa.recv(buf, &len)) 
+		// if (LoRa.recv(buf, &len)) 
+		// {
+		// 	Serial.print(F("Received: "));
+		// 	Serial.println((char *)&buf);
+		// }
+		// else
+		// {
+		// 	Serial.println(F("recv failed"));
+		// }
+
+
+		// Should be a message for us now   
+
+		if (LoRa.recv(LoRa_RX_Buffer, &LORA_BUFF_LEN)) 
 		{
 			Serial.print(F("Received: "));
-			Serial.println((char *)&buf);
+			Serial.println((char *)&LoRa_RX_Buffer);
 		}
 		else
 		{
@@ -242,16 +295,37 @@ void LoRa_RX()
 
 void LoRa_TX()
 {
-	uint8_t data[HWMessageLen+1] = {0};
-	for(uint8_t i = 0; i<= HWMessageLen; i++) data[i] = (uint8_t)HWMessage[i];
+	// uint8_t data[HWMessageLen+1] = {0};
+	// for(uint8_t i = 0; i<= HWMessageLen; i++)
+	// 	data[i] = (uint8_t) HWMessage[i];
 
-	LoRa.send(data, sizeof(data)); // Send out ID + Sensor data to LoRa gateway
+	// LoRa.send(data, sizeof(data)); // Send out ID + Sensor data to LoRa gateway
 
-	Serial.print(F("Sent: "));
+	// Serial.print(F("Sent: "));
 
-	Serial.println((char *)&data);
+	// Serial.println((char *)&data);
+
+	Serial.println(F("Transmitting data..."));
+
+	// Get current battery level
+	LoRa_TX_Buffer[3] = getBattPercent();
 	
-	delay(4000);
+	// Transmit LoRa_TX_Buffer
+	LoRa.send(LoRa_TX_Buffer, LORA_BUFF_LEN);
+
+	// Print sent data
+	Serial.print(F("Sent: "));
+	for (uint8_t i = 0; i < LORA_BUFF_LEN; ++i)
+	{
+		Serial.print(F("\t"));
+		Serial.print(LoRa_TX_Buffer[i], HEX);
+	}
+	Serial.println();
+	
+
+	// delay(4000);
+
+	return;
 }
 
 
@@ -412,24 +486,19 @@ bool Compare_RW_Buffers()
 	// by counting the number of bytes that are equal
 	// Serial.println(F("Checking result..."));
 	uint8_t count = 0;
-	for (uint8_t i = 0; i < DATA_SIZE; i++) 
+	for (uint8_t i = 0; i < TAG_DATA_SIZE; i++) 
 	{
 		// Compare buffer (= what we've read) with dataBlock (= what we've written)
 		if (DataBlock_W[i] == DataBlock_R[i])
 			count++;
 	}
 	
-	Serial.print(F("Number of bytes that match = ")); 
-	Serial.println(count, DEC);
+	// Serial.print(F("Number of bytes that match = ")); 
+	// Serial.println(count, DEC);
 
-	if (count == DATA_SIZE) 
+	if (count != TAG_DATA_SIZE) 
 	{
-		Serial.println(F("Success :)"));
-	} 
-	else 
-	{
-		Serial.println(F("Failure, no match :("));
-		Serial.println(F("  perhaps the write didn't work properly..."));
+		Serial.println(F("Error: r/w buffers don't match"));
 		return false;
 	}
 
@@ -439,7 +508,7 @@ bool Compare_RW_Buffers()
 void Copy_R2W_Buffer()
 {
 	// Copies DataBlock_R into DataBlock_W buffer
-	memcpy ( &DataBlock_W, &DataBlock_R, DATA_SIZE);
+	memcpy ( &DataBlock_W, &DataBlock_R, TAG_DATA_SIZE);
 
 	return;
 }
@@ -448,7 +517,7 @@ void PrintDataBlock(uint8_t *buffer)
 {
 	// Print read data to console - HEX
 	Serial.print(F("Tag Data (HEX): "));
-	for (uint8_t i = 0; i < DATA_SIZE; ++i)
+	for (uint8_t i = 0; i < TAG_DATA_SIZE; ++i)
 	{
 		Serial.print(*(buffer + i), HEX);
 		Serial.print(F(" "));
@@ -458,7 +527,7 @@ void PrintDataBlock(uint8_t *buffer)
 
 	// Print read data to console - CHAR
 	Serial.print(F("Tag Data (CHAR): \""));
-	for (uint8_t i = 0; i < DATA_SIZE; ++i)
+	for (uint8_t i = 0; i < TAG_DATA_SIZE; ++i)
 		Serial.write(*(buffer + i));
 
 	Serial.println(F("\""));
@@ -567,6 +636,12 @@ void ValidateTag()
 void CheckUID()
 {
 	// Checks if current tag was tapped within last couple of tags
+	// NOTE: these checks don't account for case where first uid.size bytes are the same across different tag types (uid lengths)
+	// But I vaguely recall tag types are stored within UID bytes, so this may not be an issue
+
+
+	Serial.println(F("Checking UID"));
+
 
 	int Similarity = 0;			// 0 = identical, other +/- numbers indicate mis-match 
 
@@ -576,22 +651,23 @@ void CheckUID()
 	{
 		// Card was the same as last tapped
 		// TODO - add timeout period (e.g. if tag was tapped a min later treat as new card)
-		TagReTapped = true;
+		Serial.println(F("RETAPPED"));
+		NFC_State = TAG_RETAPPED;
 		return;
 	}
 	else
-		TagReTapped = false;
+		NFC_State = TAG_NEW;
+
+	Serial.println(F("NEW TAG"));
 
 	
 	// Check the rest of the recorded UIDs (if it wasn't last tag)
-	// NOTE: this doesn't account for case where first uid.size bytes are the same across different tag types
-	// But I vaguely recall tag types are stored within UID bytes, so this may not be an issue
 	for (uint8_t i = 0; i < NUM_LOGGED_UIDS; ++i)
 	{
 		Similarity = memcmp((UID_Log + i * MAX_UID_LEN), mfrc522.uid.uidByte, mfrc522.uid.size);
 
-		Serial.print(F("Similarity = "));
-		Serial.println(Similarity, DEC);		
+		// Serial.print(F("Similarity = "));
+		// Serial.println(Similarity, DEC);		
 
 		// TODO - maybe do something if Similarity = 0 for one or more of the logs
 	}
@@ -610,19 +686,19 @@ void CheckUID()
 	}
 
 
-/*	// Print logged tag UIDs to console
-	for (uint8_t i = 0; i < NUM_LOGGED_UIDS; ++i)
-	{
-		Serial.print(F("\nRow "));
-		Serial.print(i, HEX);
+	// // Print logged tag UIDs to console
+	// for (uint8_t i = 0; i < NUM_LOGGED_UIDS; ++i)
+	// {
+	// 	Serial.print(F("\nRow "));
+	// 	Serial.print(i, HEX);
 
-		for (uint8_t j = 0; j < MAX_UID_LEN; ++j)
-		{
-			Serial.print(F("\t"));
-			Serial.print(UID_Log[i * MAX_UID_LEN + j], HEX);
-		}
-	}
-	Serial.println();*/
+	// 	for (uint8_t j = 0; j < MAX_UID_LEN; ++j)
+	// 	{
+	// 		Serial.print(F("\t"));
+	// 		Serial.print(UID_Log[i * MAX_UID_LEN + j], HEX);
+	// 	}
+	// }
+	// Serial.println();
 
 
 	return;
@@ -630,7 +706,26 @@ void CheckUID()
 
 void ProcessTag()
 {
-	CheckUID();
+	Serial.println(F("ProcessingTag"));
+	// Transmit tag UID & data to main computer via LoRa
+
+
+
+	// Copy UID into LoRa_TX_Buffer
+	memcpy( (LoRa_TX_Buffer + STATION_DATA_LEN), (UID_Log + lastUIDRow * MAX_UID_LEN), MAX_UID_LEN);
+
+	// Copy tag Data into LoRa_TX_Buffer
+	memcpy( (LoRa_TX_Buffer + STATION_DATA_LEN + MAX_UID_LEN), DataBlock_R, TAG_DATA_SIZE);
+
+	// Transmit the things
+	LoRa_TX();
+
+
+	// Wait for response
+
+
+	// Copy response back onto Tag 
+	
 
 
 	NFC_State = WRITE_TO_CARD;
@@ -638,3 +733,12 @@ void ProcessTag()
 
 	return;
 }
+
+
+
+
+// TAG UID = 04 A1 83 7A A7 5E 80	
+
+
+// 2	1	0	FF	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	4	A1	83	7A	A7	5E	80	0	0	0	43	32	31	D	20
+
