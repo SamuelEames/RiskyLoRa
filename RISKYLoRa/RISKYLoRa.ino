@@ -90,10 +90,10 @@ RH_RF95 rf95(RFM95_CS, RFM95_INT);				// Instanciate a LoRa driver
 Speck myCipher;										// Instanciate a Speck block ciphering
 RHEncryptedDriver LoRa(rf95, myCipher);		// Instantiate the driver with those two
 
-uint8_t encryptkey[16]={1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16}; // Encryption Key - keep secret ;)
+uint8_t encryptkey[16] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16}; // Encryption Key - keep secret ;)
 
-char HWMessage[] = "Hello World ! I'm happy if you can read me";
-uint8_t HWMessageLen;
+// char HWMessage[] = "Hello World ! I'm happy if you can read me";
+// uint8_t HWMessageLen;
 
 // Holds destination Station ID, [this] Station ID, battery %, other?
 #define STATION_DATA_LEN 5
@@ -104,6 +104,7 @@ uint8_t HWMessageLen;
 //		[2] Current State / Message type
 // 	[3] Batt %	(set in TX function)
 // 	[4] Spare?? ... I'll think of something 
+
 
 const uint8_t LORA_BUFF_LEN = STATION_DATA_LEN + MAX_UID_LEN + TAG_DATA_SIZE; // NOTE: ensure this isn't greater than LoRa.maxMessageLength() = 239 bytes
 
@@ -129,17 +130,18 @@ void setup()
 	Serial.begin(115200);
 	while (!Serial) ; 								// Wait for serial port to be available
 
-	Serial.println(F("LoRa Simple_Encrypted"));
+	// Serial.println(F("LoRa Simple_Encrypted"));
 
 	leds[1] = CRGB::Red;
 	FastLED.show();
 
 	// LORA SETUP
-	HWMessageLen = strlen(HWMessage);
+	// HWMessageLen = strlen(HWMessage);
 
 	if (!rf95.init())
 		Serial.println(F("LoRa init failed"));
-	
+
+	rf95.setFrequency(RF95_FREQ);
 	rf95.setTxPower(13); 							// Setup Power,dBm
 	myCipher.setKey(encryptkey, sizeof(encryptkey));
 
@@ -148,8 +150,8 @@ void setup()
 
 	Serial.println(F("Setup completed"));
 
-	Serial.print(F("Max message length = "));
-	Serial.println(LoRa.maxMessageLength());
+	// Serial.print(F("Max message length = "));
+	// Serial.println(LoRa.maxMessageLength());
 
 	// Read thid stationID - recorded to EEPROM beforehand
 	LoRa_TX_Buffer[0] = EEPROM.read(0);
@@ -194,9 +196,7 @@ void loop()
 {
 	LoRa_RX();
 
-	// getBattPercent();
-
-
+	// Handle NFC errors
 	if (status != MFRC522::STATUS_OK) 
 	{
 		Serial.print(F("\nNFC Fault: "));
@@ -210,7 +210,6 @@ void loop()
 		// If we failed during writing, retap card
 			// Ensure UID is still the same
 			// Go straight back to writing what we last intended (don't recopy data from tag, in case it's wrong)
-
 	}
 
 
@@ -223,18 +222,22 @@ void loop()
 
 		case TAG_READ:				// Step 2 - Check tag is part of game
 			ValidateTag();
+			return;
 			break;
 
 		case TAG_VALID:			// Step 3 - Check if new tag, or re-tapped card
 			CheckUID();
+			return;
 			break;
 
 		case TAG_RETAPPED:		// Step 3.5 - If retapped card, complete write operation (TODO only if reading & processing was completed)
 			WriteTag();
+			return;
 			break;
 
 		case TAG_NEW:				// Step 4 - Process data & transmit over LoRa to game computer
 			ProcessTag();
+			return;
 			break;
 
 		case WAIT_FOR_LORA:		// Step 5 - Wait for LoRa response from game computer
@@ -243,22 +246,13 @@ void loop()
 
 		case WRITE_TO_CARD:		// Step 6 - Write updated data to tag 🥳
 			WriteTag();
+			return;
 			break;
 
 		default:
 			break;
 	}
 	
-
-	// Process Data
-
-	// Write to Card
-
-	// Check written data
-
-	// Re-attempt write
-
-
 
 
 	// delay(500);
@@ -271,40 +265,35 @@ void LoRa_RX()
 {
 	if (LoRa.available())
 	{
-
-		Serial.println(F("HOLD ON, I'M GETTING SOMETHING"));
 		// Should be a message for us now   
-		// uint8_t buf[LoRa.maxMessageLength()];
-		// uint8_t len = sizeof(buf);
+		uint8_t tempBuff[LoRa.maxMessageLength()]; 			// Doesn't seem to work unless buffer is of size maxMessageLength
+		uint8_t tempBuffLen = LoRa.maxMessageLength();		// recv() function will return bytes recieved in this variable
 
-		// if (LoRa.recv(buf, &len)) 
-		// {
-		// 	Serial.print(F("Received: "));
-		// 	Serial.println((char *)&buf);
-		// }
-		// else
-		// {
-		// 	Serial.println(F("recv failed"));
-		// }
-
-
-		// Should be a message for us now   
-
-		if (LoRa.recv(LoRa_RX_Buffer, &LORA_BUFF_LEN)) 
+		if (LoRa.recv(tempBuff, &tempBuffLen)) 
 		{
+
+			if (tempBuffLen != LORA_BUFF_LEN)
+			{
+				Serial.print(F("ERROR: LoRa did not receive expected number of bytes"));
+				return;
+			}
+			else
+				memcpy(LoRa_RX_Buffer, tempBuff, LORA_BUFF_LEN);
+
 			// Print received data
 			Serial.print(F("Received: "));
-			for (uint8_t i = 0; i < LORA_BUFF_LEN; ++i)
+			for (uint8_t i = 0; i < tempBuffLen; ++i)
 			{
 				Serial.print(F(" "));
-				Serial.print(LoRa_RX_Buffer[i], HEX);
+				Serial.print(tempBuff[i], HEX);
 			}
 			Serial.println();
 		}
 		else
-			Serial.println(F("LoRa receive failed"));
-
-
+		{
+			Serial.println(F("recv failed"));
+			// Maybe try again?
+		}
 	}
 
 	return;
@@ -312,23 +301,13 @@ void LoRa_RX()
 
 void LoRa_TX()
 {
-	// uint8_t data[HWMessageLen+1] = {0};
-	// for(uint8_t i = 0; i<= HWMessageLen; i++)
-	// 	data[i] = (uint8_t) HWMessage[i];
-
-	// LoRa.send(data, sizeof(data)); // Send out ID + Sensor data to LoRa gateway
-
-	// Serial.print(F("Sent: "));
-
-	// Serial.println((char *)&data);
-
-	Serial.println(F("Transmitting data..."));
+	// Transmit LoRa message
 
 	// Get current battery level
 	LoRa_TX_Buffer[3] = getBattPercent();
 	
 	// Transmit LoRa_TX_Buffer
-	if (LoRa.send(LoRa_TX_Buffer, LORA_BUFF_LEN))
+	if (LoRa.send((const) LoRa_TX_Buffer, LORA_BUFF_LEN))
 	{
 		// Print sent data
 		Serial.print(F("Sent: "));
@@ -341,11 +320,6 @@ void LoRa_TX()
 	}
 	else
 		Serial.println(F("LoRa transmit failed"));
-
-
-	
-
-	// delay(4000);
 
 	return;
 }
@@ -373,9 +347,9 @@ uint8_t getBattPercent()
 	// Calculate voltage in mV
 	uint16_t voltRAW_MV = analogRead(BVOLT_PIN) * 24.4140;
 
-	Serial.print(F("Battery voltage = "));
-	Serial.print(voltRAW_MV);
-	Serial.println(F(" mV"));
+	// Serial.print(F("Battery voltage = "));
+	// Serial.print(voltRAW_MV);
+	// Serial.println(F(" mV"));
 
 
 	if (voltRAW_MV <= LIPO_MINV)			// Flat battery
@@ -668,9 +642,6 @@ void CheckUID()
 	// But I vaguely recall tag types are stored within UID bytes, so this may not be an issue
 
 
-	Serial.println(F("Checking UID"));
-
-
 	int Similarity = 0;			// 0 = identical, other +/- numbers indicate mis-match 
 
 	
@@ -685,8 +656,6 @@ void CheckUID()
 	}
 	else
 		NFC_State = TAG_NEW;
-
-	Serial.println(F("NEW TAG"));
 
 	
 	// Check the rest of the recorded UIDs (if it wasn't last tag)
@@ -734,7 +703,7 @@ void CheckUID()
 
 void ProcessTag()
 {
-	Serial.println(F("ProcessingTag"));
+
 	// Transmit tag UID & data to main computer via LoRa
 
 
