@@ -44,7 +44,7 @@ RH_RF95 rf95(RFM95_CS, RFM95_INT);				// Instanciate a LoRa driver
 Speck myCipher;										// Instanciate a Speck block ciphering
 RHEncryptedDriver LoRa(rf95, myCipher);		// Instantiate the driver with those two
 
-unsigned char encryptkey[16]={1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16}; // Encryption Key - keep secret ;)
+uint8_t encryptkey[16]={1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16}; // Encryption Key - keep secret ;)
 
 char HWMessage[] = "Hello World ! I'm happy if you can read me";
 uint8_t HWMessageLen;
@@ -79,6 +79,12 @@ uint8_t NFC_State = READY_FOR_TAG;
 
 uint8_t validateCode[3] = {'C', '2', '1'};
 
+#define MAX_UID_LEN 			10
+#define NUM_LOGGED_UIDS 	10
+uint8_t UID_Log[MAX_UID_LEN * NUM_LOGGED_UIDS];	// Stores the UIDs of the last NUM_LOGGED_UIDS cards logged
+uint8_t lastUIDRow = 0;									// Row into which UID of last valid tag was stored
+
+bool TagReTapped = false;				// True if same tag was tapped twice in a row
 
 // PIXEL SETUP
 #define NUM_LEDS 			24
@@ -182,7 +188,7 @@ void loop()
 			break;
 
 		case TAG_VALID:			// 
-			// ProcessTag();
+			ProcessTag();
 			break;
 
 		case WAIT_FOR_LORA:		// Possibly not required
@@ -209,7 +215,7 @@ void loop()
 
 
 
-	delay(500);
+	// delay(500);
 }
 
 
@@ -544,7 +550,7 @@ void ValidateTag()
 	{
 		// Tag is valid
 		Serial.println(F("Tag Valid"));
-		NFC_State = WRITE_TO_CARD;
+		NFC_State = TAG_VALID;
 		Copy_R2W_Buffer();
 	}
 	else
@@ -554,6 +560,81 @@ void ValidateTag()
 		NFC_State = READY_FOR_TAG;
 		Serial.println(F("Tag invalid"));
 	}
+
+	return;
+}
+
+void CheckUID()
+{
+	// Checks if current tag was tapped within last couple of tags
+
+	int Similarity = 0;			// 0 = identical, other +/- numbers indicate mis-match 
+
+	
+	// Check last recorded UID first
+	if(memcmp((UID_Log + lastUIDRow * MAX_UID_LEN), mfrc522.uid.uidByte, mfrc522.uid.size) == 0)
+	{
+		// Card was the same as last tapped
+		// TODO - add timeout period (e.g. if tag was tapped a min later treat as new card)
+		TagReTapped = true;
+		return;
+	}
+	else
+		TagReTapped = false;
+
+	
+	// Check the rest of the recorded UIDs (if it wasn't last tag)
+	// NOTE: this doesn't account for case where first uid.size bytes are the same across different tag types
+	// But I vaguely recall tag types are stored within UID bytes, so this may not be an issue
+	for (uint8_t i = 0; i < NUM_LOGGED_UIDS; ++i)
+	{
+		Similarity = memcmp((UID_Log + i * MAX_UID_LEN), mfrc522.uid.uidByte, mfrc522.uid.size);
+
+		Serial.print(F("Similarity = "));
+		Serial.println(Similarity, DEC);		
+
+		// TODO - maybe do something if Similarity = 0 for one or more of the logs
+	}
+
+
+	// Record current tag
+	if (++lastUIDRow >= NUM_LOGGED_UIDS)		// Update location to store UID to
+		lastUIDRow = 0;
+
+	for (uint8_t i = 0; i < MAX_UID_LEN; ++i)
+	{
+		if (i < mfrc522.uid.size)					// Record UID
+			UID_Log[lastUIDRow * MAX_UID_LEN + i] = mfrc522.uid.uidByte[i];
+		else
+			UID_Log[lastUIDRow * MAX_UID_LEN + i] = ZERO; 		// fill the rest with zeroes
+	}
+
+
+/*	// Print logged tag UIDs to console
+	for (uint8_t i = 0; i < NUM_LOGGED_UIDS; ++i)
+	{
+		Serial.print(F("\nRow "));
+		Serial.print(i, HEX);
+
+		for (uint8_t j = 0; j < MAX_UID_LEN; ++j)
+		{
+			Serial.print(F("\t"));
+			Serial.print(UID_Log[i * MAX_UID_LEN + j], HEX);
+		}
+	}
+	Serial.println();*/
+
+
+	return;
+}
+
+void ProcessTag()
+{
+	CheckUID();
+
+
+	NFC_State = WRITE_TO_CARD;
+
 
 	return;
 }
