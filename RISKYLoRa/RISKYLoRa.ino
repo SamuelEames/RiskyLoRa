@@ -58,8 +58,9 @@ uint8_t *Ptr_DataBlock_R;
 
 MFRC522::MIFARE_Key key;				// Used with 1K cards
 
-const uint8_t readLen = 18;			// 16 bytes + 2x CRC bytes
-uint8_t readBuffer[readLen];			// Temporary buffer tag data is stored to during reading
+#define READLEN 				18			// 16 bytes + 2x CRC bytes
+uint8_t readLen = READLEN;				// readlen var passed to NFC read functions - it is sometimes modified by these functions so can't be a constant
+uint8_t readBuffer[READLEN];			// Temporary buffer tag data is stored to during reading
 
 #define START_PAGE_ADDR  	0x04		// Initial page to read from (NTAG Stickers)
 #define START_BLOCK_ADDR 	0x04		// Initial block to read from (1K Cards)
@@ -179,6 +180,14 @@ void setup()
 	fill_solid(leds, NUM_LEDS, CRGB::Green);
 	FastLED.show();
 
+	// Buzzer setup
+	pinMode(BUZZ_PIN, OUTPUT);
+
+	// Make a little noise
+	digitalWrite(BUZZ_PIN, LOW);
+	delay(100);
+	digitalWrite(BUZZ_PIN, HIGH);
+
 }
 
 void loop()
@@ -201,9 +210,6 @@ void loop()
 		// If we failed during writing, retap card
 			// Ensure UID is still the same
 			// Go straight back to writing what we last intended (don't recopy data from tag, in case it's wrong)
-
-		// TODO - Reset card reader if fault is "A buffer is not big enough."
-
 
 	}
 
@@ -260,10 +266,13 @@ void loop()
 
 
 
+
 void LoRa_RX()
 {
 	if (LoRa.available())
 	{
+
+		Serial.println(F("HOLD ON, I'M GETTING SOMETHING"));
 		// Should be a message for us now   
 		// uint8_t buf[LoRa.maxMessageLength()];
 		// uint8_t len = sizeof(buf);
@@ -283,14 +292,22 @@ void LoRa_RX()
 
 		if (LoRa.recv(LoRa_RX_Buffer, &LORA_BUFF_LEN)) 
 		{
+			// Print received data
 			Serial.print(F("Received: "));
-			Serial.println((char *)&LoRa_RX_Buffer);
+			for (uint8_t i = 0; i < LORA_BUFF_LEN; ++i)
+			{
+				Serial.print(F(" "));
+				Serial.print(LoRa_RX_Buffer[i], HEX);
+			}
+			Serial.println();
 		}
 		else
-		{
-			Serial.println(F("recv failed"));
-		}
+			Serial.println(F("LoRa receive failed"));
+
+
 	}
+
+	return;
 }
 
 void LoRa_TX()
@@ -311,16 +328,21 @@ void LoRa_TX()
 	LoRa_TX_Buffer[3] = getBattPercent();
 	
 	// Transmit LoRa_TX_Buffer
-	LoRa.send(LoRa_TX_Buffer, LORA_BUFF_LEN);
-
-	// Print sent data
-	Serial.print(F("Sent: "));
-	for (uint8_t i = 0; i < LORA_BUFF_LEN; ++i)
+	if (LoRa.send(LoRa_TX_Buffer, LORA_BUFF_LEN))
 	{
-		Serial.print(F("\t"));
-		Serial.print(LoRa_TX_Buffer[i], HEX);
+		// Print sent data
+		Serial.print(F("Sent: "));
+		for (uint8_t i = 0; i < LORA_BUFF_LEN; ++i)
+		{
+			Serial.print(F(" "));
+			Serial.print(LoRa_TX_Buffer[i], HEX);
+		}
+		Serial.println();
 	}
-	Serial.println();
+	else
+		Serial.println(F("LoRa transmit failed"));
+
+
 	
 
 	// delay(4000);
@@ -369,6 +391,9 @@ void Read_NTAG_Data()			// Used with PICC_TYPE_MIFARE_UL type
 	// Read data from user section of tags
 	for (uint8_t BlockNum = 0; BlockNum < (DATAROWS/4); ++BlockNum)
 	{
+		// Reset readlen back to intended size in case it changed after error
+		readLen = READLEN; 
+
 		// Get data from tag, starting from page 4 (user read/write section begins here)
 		status = mfrc522.MIFARE_Read(START_PAGE_ADDR + (BlockNum * 4), readBuffer, &readLen);
 
@@ -435,6 +460,9 @@ void Read_1KTAG_Data()				// Used with PICC_TYPE_MIFARE_1K type
 		// Authenticate current working block
 		if(!Auth_1KTAG(BlockNum))
 			return;
+
+		// Reset readlen back to intended size in case it changed after error
+		readLen = READLEN; 
 
 		// Get data from tag, starting from block 4 (user read/write section begins here)
 		status = mfrc522.MIFARE_Read(START_BLOCK_ADDR + (BlockNum * 4), readBuffer, &readLen);
