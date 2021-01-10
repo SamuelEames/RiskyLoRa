@@ -7,13 +7,13 @@
 
 // Include the things
 #include <RH_RF95.h>					// LoRa Driver
-#include <RHEncryptedDriver.h>	// LoRa Encryption 
-#include <Speck.h>					// LoRa Encryption 
+#include <RHReliableDatagram.h>
 #include "RiskyVars.h"				// Extra local variables
 #include <FastLED.h>					// Pixel LED
 #include <SPI.h>						// NFC Reader
 #include <MFRC522.h>					// NFC Reader
 #include <EEPROM.h>					// EEPROM used to store (this) station ID
+#include <avr/sleep.h>				// Just go to sleep if there's an error
 		
 
 
@@ -86,32 +86,26 @@ CRGB leds[NUM_LEDS];									// Instanciate pixel driver
 // LORA SETUP
 #define RF95_FREQ 915.0
 
+#define ADDR_MASTER 	0x01							// Address of master station
+
 RH_RF95 rf95(RFM95_CS, RFM95_INT);				// Instanciate a LoRa driver
-Speck myCipher;										// Instanciate a Speck block ciphering
-RHEncryptedDriver LoRa(rf95, myCipher);		// Instantiate the driver with those two
+RHReliableDatagram LoRa(rf95, EEPROM.read(0));
 
-uint8_t encryptkey[16] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16}; // Encryption Key - keep secret ;)
-
-// char HWMessage[] = "Hello World ! I'm happy if you can read me";
-// uint8_t HWMessageLen;
 
 // Holds destination Station ID, [this] Station ID, battery %, other?
-#define STATION_DATA_LEN 5
+#define STATION_DATA_LEN 2
 // uint8_t StationData[STATION_DATA_LEN]; // don't even need this because data is saved straight into LoRa_TX_Buffer
 // STATION DATA MAP
-// 	[0] This station ID (set in Setup function from EEPROM data)
-// 	[1] Destination Station ID
-//		[2] Current State / Message type
-// 	[3] Batt %	(set in TX function)
-// 	[4] Spare?? ... I'll think of something 
+//		[0] Current State / Message type
+// 	[1] Batt %	(set in TX function)
 
 
 const uint8_t LORA_BUFF_LEN = STATION_DATA_LEN + MAX_UID_LEN + TAG_DATA_SIZE; // NOTE: ensure this isn't greater than LoRa.maxMessageLength() = 239 bytes
+uint8_t LoRa_RecvBuffLen; 							// Set to RH_RF95_MAX_MESSAGE_LEN before each recv
 
 uint8_t LoRa_TX_Buffer[LORA_BUFF_LEN]; 		// Buffer to transmit over LoRa
-uint8_t LoRa_RX_Buffer[LORA_BUFF_LEN];			// Data recieved from LoRa stored here
-
-#define MASTER_ID 0x01								// ID of master station
+uint8_t LoRa_RX_Buffer[RH_RF95_MAX_MESSAGE_LEN];			// Data recieved from LoRa stored here
+uint8_t LoRa_msgFrom;								// Holds ID of station last message was received from
 
 
 
@@ -130,44 +124,29 @@ void setup()
 	Serial.begin(115200);
 	while (!Serial) ; 								// Wait for serial port to be available
 
-	// Serial.println(F("LoRa Simple_Encrypted"));
-
 	leds[1] = CRGB::Red;
 	FastLED.show();
 
 	// LORA SETUP
-	// HWMessageLen = strlen(HWMessage);
-
-	if (!rf95.init())
-		Serial.println(F("LoRa init failed"));
+	if (!LoRa.init())
+	{
+		Serial.println("LoRa init failed");
+		// Just go to sleep
+		stop();
+	}
 
 	rf95.setFrequency(RF95_FREQ);
 	rf95.setTxPower(13); 							// Setup Power,dBm
-	myCipher.setKey(encryptkey, sizeof(encryptkey));
 
 	Serial.println(F("Waiting for radio to setup"));
 	delay(1000); 	// TODO - Why this delay?
 
 	Serial.println(F("Setup completed"));
 
-	// Serial.print(F("Max message length = "));
-	// Serial.println(LoRa.maxMessageLength());
-
-	// Read thid stationID - recorded to EEPROM beforehand
-	LoRa_TX_Buffer[0] = EEPROM.read(0);
-
-	// Set destination for LoRa message (we'll only be sending to master station)
-	LoRa_TX_Buffer[1] = MASTER_ID; 
-
 
 	leds[2] = CRGB::Red;
 	FastLED.show();
 
-	// LoRa_TX();
-
-	// delay(5000);
-
-	// LoRa_TX();
 
 	// CARD READER SETUP
 	mfrc522.PCD_Init();					// Init MFRC522 reader
@@ -191,6 +170,9 @@ void setup()
 	digitalWrite(BUZZ_PIN, HIGH);
 
 }
+
+
+
 
 void loop()
 {
@@ -254,61 +236,65 @@ void loop()
 	}
 	
 
-
-	// delay(500);
 }
 
+
+void stop()
+{
+	// Stop code execution if we run into an error we can't recover from
+	set_sleep_mode (SLEEP_MODE_PWR_DOWN);  
+	sleep_enable();
+	sleep_cpu ();  
+
+	return;
+}
 
 
 
 void LoRa_RX()
 {
+
 	if (LoRa.available())
 	{
-		// Should be a message for us now   
-		uint8_t tempBuff[LoRa.maxMessageLength()]; 			// Doesn't seem to work unless buffer is of size maxMessageLength
-		uint8_t tempBuffLen = LoRa.maxMessageLength();		// recv() function will return bytes recieved in this variable
-
-		if (LoRa.recv(tempBuff, &tempBuffLen)) 
+		// Wait for a message addressed to us from the client
+		LoRa_RecvBuffLen = RH_RF95_MAX_MESSAGE_LEN;
+		if (LoRa.recvfromAck(LoRa_RX_Buffer, LoRa_RecvBuffLen, &LoRa_msgFrom))
 		{
+			Serial.print(F("got request from : 0x"));
+			Serial.print(LoRa_msgFrom, HEX);
 
-			if (tempBuffLen != LORA_BUFF_LEN)
-			{
-				Serial.print(F("ERROR: LoRa did not receive expected number of bytes"));
-				return;
-			}
-			else
-				memcpy(LoRa_RX_Buffer, tempBuff, LORA_BUFF_LEN);
-
-			// Print received data
 			Serial.print(F("Received: "));
-			for (uint8_t i = 0; i < tempBuffLen; ++i)
+			for (uint8_t i = 0; i < LoRa_RecvBuffLen; ++i)
 			{
 				Serial.print(F(" "));
-				Serial.print(tempBuff[i], HEX);
+				Serial.print(LoRa_RX_Buffer[i], HEX);
 			}
 			Serial.println();
-		}
-		else
-		{
-			Serial.println(F("recv failed"));
-			// Maybe try again?
+
+
+			// Send a VERY SHORT reply back to the originator client
+			if (!LoRa.sendtoWait(&LoRa_msgFrom, 1, LoRa_msgFrom))
+				Serial.println(F("sendtoWait failed"));
 		}
 	}
 
 	return;
 }
 
+
 void LoRa_TX()
 {
 	// Transmit LoRa message
 
-	// Get current battery level
-	LoRa_TX_Buffer[3] = getBattPercent();
+	// Update station data
+	// LoRa_TX_Buffer[0] = GameState;				// Get current game state
+	LoRa_TX_Buffer[1] = getBattPercent();		// Get current battery level
 	
-	// Transmit LoRa_TX_Buffer
-	if (LoRa.send((const) LoRa_TX_Buffer, LORA_BUFF_LEN))
+
+	if (LoRa.sendtoWait(LoRa_TX_Buffer, LORA_BUFF_LEN, ADDR_MASTER))
 	{
+		// Now wait for a reply from the server
+
 		// Print sent data
 		Serial.print(F("Sent: "));
 		for (uint8_t i = 0; i < LORA_BUFF_LEN; ++i)
@@ -317,9 +303,30 @@ void LoRa_TX()
 			Serial.print(LoRa_TX_Buffer[i], HEX);
 		}
 		Serial.println();
+
+
+		LoRa_RecvBuffLen = RH_RF95_MAX_MESSAGE_LEN;  
+		if (LoRa.recvfromAckTimeout(LoRa_RX_Buffer, &LoRa_RecvBuffLen, 2000, &LoRa_msgFrom))
+		{
+			Serial.print(F("got reply from : 0x"));
+			Serial.println(LoRa_msgFrom, HEX);
+
+
+			Serial.print(F("Received: "));
+			for (uint8_t i = 0; i < LoRa_RecvBuffLen; ++i)
+			{
+				Serial.print(F(" "));
+				Serial.print(LoRa_RX_Buffer[i], HEX);
+			}
+			Serial.println();
+		}
+		else
+			Serial.println(F("No reply from master station?"));
 	}
 	else
-		Serial.println(F("LoRa transmit failed"));
+		Serial.println(F("sendtoWait failed"));
+
+
 
 	return;
 }
@@ -407,7 +414,6 @@ void Write_NTAG_Data()				// Used with PICC_TYPE_MIFARE_UL type
 	// Check written data is correct (e.g. may be wrong if card was removed during r/w operation)
 	Compare_RW_Buffers();
 
-	// TODO - add option here to reattempt card writing e.g. message to re-tap card
 
 	return;
 }
