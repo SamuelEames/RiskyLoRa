@@ -107,11 +107,19 @@ uint8_t LoRa_TX_Buffer[LORA_BUFF_LEN]; 		// Buffer to transmit over LoRa
 uint8_t LoRa_RX_Buffer[RH_RF95_MAX_MESSAGE_LEN];			// Data recieved from LoRa stored here
 uint8_t LoRa_msgFrom;								// Holds ID of station last message was received from
 
+bool ImTheMaster;
+bool newLoRaMessage = false;
 
 
 
 void setup()
 {
+	if (EEPROM.read(0) == ADDR_MASTER)
+		ImTheMaster = true;
+	else
+		ImTheMaster = false;
+
+
 	// PIXEL SETUP
 	FastLED.addLeds<WS2812B, LED_DATA, GRB>(leds, NUM_LEDS); 
 	FastLED.setMaxPowerInVoltsAndMilliamps(5,5); 						// Limit total power draw of LEDs to 200mA at 5V
@@ -144,19 +152,25 @@ void setup()
 	Serial.println(F("Setup completed"));
 
 
+
+
 	leds[2] = CRGB::Red;
 	FastLED.show();
 
 
-	// CARD READER SETUP
-	mfrc522.PCD_Init();					// Init MFRC522 reader
+	if (!ImTheMaster)
+	{
+		// CARD READER SETUP
+		mfrc522.PCD_Init();					// Init MFRC522 reader
 
-	Ptr_DataBlock_R = &DataBlock_R[0];	
-	Ptr_DataBlock_W = &DataBlock_W[0];	
+		Ptr_DataBlock_R = &DataBlock_R[0];	
+		Ptr_DataBlock_W = &DataBlock_W[0];	
 
-	// Prepare the key (used both as key A and as key B) for 1K cards
-	for (byte i = 0; i < 6; i++) 
-		key.keyByte[i] = 0xFF;
+		// Prepare the key (used both as key A and as key B) for 1K cards
+		for (byte i = 0; i < 6; i++) 
+			key.keyByte[i] = 0xFF;		
+	}
+
 
 	fill_solid(leds, NUM_LEDS, CRGB::Green);
 	FastLED.show();
@@ -178,63 +192,83 @@ void loop()
 {
 	LoRa_RX();
 
-	// Handle NFC errors
-	if (status != MFRC522::STATUS_OK) 
+	if (ImTheMaster)
 	{
-		Serial.print(F("\nNFC Fault: "));
-		Serial.println(mfrc522.GetStatusCodeName(status));
+		// MASTER STATION
 
-		// Restart card sequence
-		NFC_State = READY_FOR_TAG;
+		if (newLoRaMessage)
+		{
+			dumpToUSBSerial();
+			newLoRaMessage = false;
 
-		// Retap card
+			// Get response from USBSerial
+		}
 
-		// If we failed during writing, retap card
-			// Ensure UID is still the same
-			// Go straight back to writing what we last intended (don't recopy data from tag, in case it's wrong)
 	}
-
-
-
-	switch (NFC_State)
+	else
 	{
-		case READY_FOR_TAG:		// Step 1 - wait for tag to be tapped
-			ReadTag();
-			break;
+		// SLAVE STATIONS
 
-		case TAG_READ:				// Step 2 - Check tag is part of game
-			ValidateTag();
-			return;
-			break;
+		// Handle NFC errors
+		if (status != MFRC522::STATUS_OK) 
+		{
+			Serial.print(F("\nNFC Fault: "));
+			Serial.println(mfrc522.GetStatusCodeName(status));
 
-		case TAG_VALID:			// Step 3 - Check if new tag, or re-tapped card
-			CheckUID();
-			return;
-			break;
+			// Restart card sequence
+			NFC_State = READY_FOR_TAG;
 
-		case TAG_RETAPPED:		// Step 3.5 - If retapped card, complete write operation (TODO only if reading & processing was completed)
-			WriteTag();
-			return;
-			break;
+			// Retap card
 
-		case TAG_NEW:				// Step 4 - Process data & transmit over LoRa to game computer
-			ProcessTag();
-			return;
-			break;
+			// If we failed during writing, retap card
+				// Ensure UID is still the same
+				// Go straight back to writing what we last intended (don't recopy data from tag, in case it's wrong)
+		}
 
-		case WAIT_FOR_LORA:		// Step 5 - Wait for LoRa response from game computer
-			// Animate LEDs with 'loading' sequence
-			break;
+		// dumpToUSBSerial();
 
-		case WRITE_TO_CARD:		// Step 6 - Write updated data to tag 🥳
-			WriteTag();
-			return;
-			break;
 
-		default:
-			break;
+
+		switch (NFC_State)
+		{
+			case READY_FOR_TAG:		// Step 1 - wait for tag to be tapped
+				ReadTag();
+				break;
+
+			case TAG_READ:				// Step 2 - Check tag is part of game
+				ValidateTag();
+				return;
+				break;
+
+			case TAG_VALID:			// Step 3 - Check if new tag, or re-tapped card
+				CheckUID();
+				return;
+				break;
+
+			case TAG_RETAPPED:		// Step 3.5 - If retapped card, complete write operation (TODO only if reading & processing was completed)
+				WriteTag();
+				return;
+				break;
+
+			case TAG_NEW:				// Step 4 - Process data & transmit over LoRa to game computer
+				ProcessTag();
+				return;
+				break;
+
+			case WAIT_FOR_LORA:		// Step 5 - Wait for LoRa response from game computer
+				// Animate LEDs with 'loading' sequence
+				break;
+
+			case WRITE_TO_CARD:		// Step 6 - Write updated data to tag 🥳
+				WriteTag();
+				return;
+				break;
+
+			default:
+				break;
+		}
+
 	}
-	
 
 }
 
@@ -261,7 +295,7 @@ void LoRa_RX()
 		if (LoRa.recvfromAck(LoRa_RX_Buffer, LoRa_RecvBuffLen, &LoRa_msgFrom))
 		{
 			Serial.print(F("got request from : 0x"));
-			Serial.print(LoRa_msgFrom, HEX);
+			Serial.println(LoRa_msgFrom, HEX);
 
 			Serial.print(F("Received: "));
 			for (uint8_t i = 0; i < LoRa_RecvBuffLen; ++i)
@@ -271,6 +305,8 @@ void LoRa_RX()
 			}
 			Serial.println();
 
+
+			newLoRaMessage = true;
 
 			// Send a VERY SHORT reply back to the originator client
 			if (!LoRa.sendtoWait(&LoRa_msgFrom, 1, LoRa_msgFrom))
@@ -737,6 +773,65 @@ void ProcessTag()
 	return;
 }
 
+
+void dumpToUSBSerial()
+{
+	// Dumps tag data to USB serial for master computer
+
+	// Start Block
+	for (uint8_t i = 0; i < 3; ++i)
+		Serial.write('#');
+	
+
+	// Message From
+	Serial.write(LoRa_msgFrom);
+
+	// Game mode
+	Serial.write(' ');
+
+	/*
+	// LoRa_RX_Buffer
+			* Station state (game ID, mode, etc)
+			* Battery Level
+			* UID[MAX_UID_LEN]
+			* TAG_USER_DATA
+				* 'C21' (3x char)
+				* Card Type (char)
+					> 'C' = CC Modifier
+					> 'K' = Kid
+					> 'L' = Lifegroup Leader
+					> 'P' = Pastor
+					> 'S' = Other Leader
+					> 'T' = Team Form Card
+			* Conference Cash value (int16)
+			* Store Cash (int16)
+			* Time 1 (4x byte)
+			* Time 2 (4x byte)
+			* Name (16x char)
+			* MISC (16x bytes)
+	*/
+
+	for (uint8_t i = 0; i < LORA_BUFF_LEN; ++i)
+		Serial.write(LoRa_RX_Buffer[i]);
+
+	// End Block
+	for (uint8_t i = 0; i < 3; ++i)
+		Serial.write('~');
+
+	// Newline
+	Serial.write('\n');
+
+	return;
+}
+
+void getFromSerial()
+{
+	// Gets data from master computer and writes to transmit buffer to send out to stations
+
+	static uint8_t bytesReceived;
+
+	return;
+}
 
 
 
