@@ -14,7 +14,17 @@
 #include <MFRC522.h>					// NFC Reader
 #include <EEPROM.h>					// EEPROM used to store (this) station ID
 #include <avr/sleep.h>				// Just go to sleep if there's an error
-		
+
+
+// // #include <SPI.h>
+// #include <Wire.h>
+// #include <Adafruit_GFX.h>
+// #include <Adafruit_SH1106.h>
+
+#define debugMSG	1
+
+// #define OLED_RESET 1
+// Adafruit_SH1106 display(OLED_RESET);
 
 
 // ARDUINO PIN SETUP
@@ -41,7 +51,7 @@
 
 
 // TAG READER SETUP
-MFRC522 mfrc522(NFC_SS, NFC_RST);				// Instanciate card reader driver
+MFRC522 mfbyteIn522(NFC_SS, NFC_RST);				// Instanciate card reader driver
 MFRC522::StatusCode status;
 
 #define ZERO 		0x00
@@ -86,7 +96,7 @@ CRGB leds[NUM_LEDS];									// Instanciate pixel driver
 // LORA SETUP
 #define RF95_FREQ 915.0
 
-#define ADDR_MASTER 	0x01							// Address of master station
+#define ADDR_MASTER 	21							// Address of master station
 
 RH_RF95 rf95(RFM95_CS, RFM95_INT);				// Instanciate a LoRa driver
 RHReliableDatagram LoRa(rf95, EEPROM.read(0));
@@ -111,6 +121,27 @@ bool ImTheMaster;
 bool newLoRaMessage = false;
 
 
+// SERIAL SETUP
+uint8_t SerialINBuffer[5]; 						// Size indicates number of data bytes we want (ignoring validateCode bytes)
+bool newUSBSerial = false;
+
+
+/*
+	[ 1] 	Message type
+	[ 1] 	Destination Station
+	[ 1] 	Destination state
+
+	[10] DUID
+	[ 2] CC
+	[ 3] SC
+	[]
+
+
+
+
+*/
+
+
 
 void setup()
 {
@@ -130,7 +161,16 @@ void setup()
 
 	// SERIAL SETUP
 	Serial.begin(115200);
-	while (!Serial) ; 								// Wait for serial port to be available
+
+	#ifdef debugMSG
+		while (!Serial) ; 								// Wait for serial port to be available
+
+		if (ImTheMaster)
+			Serial.println(F("THE MASTER HAS ARRIVED"));
+	#endif
+
+
+
 
 	leds[1] = CRGB::Red;
 	FastLED.show();
@@ -138,18 +178,22 @@ void setup()
 	// LORA SETUP
 	if (!LoRa.init())
 	{
-		Serial.println("LoRa init failed");
+		#ifdef debugMSG
+			Serial.println("LoRa init failed");
+		#endif	
 		// Just go to sleep
-		stop();
+		// stop();
 	}
 
 	rf95.setFrequency(RF95_FREQ);
 	rf95.setTxPower(13); 							// Setup Power,dBm
 
-	Serial.println(F("Waiting for radio to setup"));
+	// Serial.println(F("Waiting for radio to setup"));
 	delay(1000); 	// TODO - Why this delay?
 
-	Serial.println(F("Setup completed"));
+	#ifdef debugMSG
+		Serial.println(F("Setup completed"));
+	#endif
 
 
 
@@ -158,18 +202,18 @@ void setup()
 	FastLED.show();
 
 
-	if (!ImTheMaster)
-	{
-		// CARD READER SETUP
-		mfrc522.PCD_Init();					// Init MFRC522 reader
+	// if (!ImTheMaster) 	// Master station doesn't have card reader, so don't bother setting it up
+	// {
+	// CARD READER SETUP
+	mfbyteIn522.PCD_Init();					// Init MFRC522 reader
 
-		Ptr_DataBlock_R = &DataBlock_R[0];	
-		Ptr_DataBlock_W = &DataBlock_W[0];	
+	Ptr_DataBlock_R = &DataBlock_R[0];	
+	Ptr_DataBlock_W = &DataBlock_W[0];	
 
-		// Prepare the key (used both as key A and as key B) for 1K cards
-		for (byte i = 0; i < 6; i++) 
-			key.keyByte[i] = 0xFF;		
-	}
+	// Prepare the key (used both as key A and as key B) for 1K cards
+	for (byte i = 0; i < 6; i++) 
+		key.keyByte[i] = 0xFF;		
+	// }
 
 
 	fill_solid(leds, NUM_LEDS, CRGB::Green);
@@ -183,6 +227,9 @@ void setup()
 	delay(100);
 	digitalWrite(BUZZ_PIN, HIGH);
 
+
+	// display.begin(SH1106_SWITCHCAPVCC, 0x3C);  // initialize with the I2C addr 0x3D (for the 128x64)
+
 }
 
 
@@ -192,16 +239,31 @@ void loop()
 {
 	LoRa_RX();
 
+
 	if (ImTheMaster)
 	{
 		// MASTER STATION
 
+		USBSerial_RX();
+
 		if (newLoRaMessage)
 		{
-			dumpToUSBSerial();
+			USBSerial_TX();
 			newLoRaMessage = false;
 
 			// Get response from USBSerial
+		}
+
+		if (newUSBSerial)
+		{
+			// Copy USB Data to LoRa_TX buffer
+
+
+			// Send data over LoRa
+
+
+			// Reset USBSerial flag
+			newUSBSerial = false;
 		}
 
 	}
@@ -212,8 +274,10 @@ void loop()
 		// Handle NFC errors
 		if (status != MFRC522::STATUS_OK) 
 		{
-			Serial.print(F("\nNFC Fault: "));
-			Serial.println(mfrc522.GetStatusCodeName(status));
+			#ifdef debugMSG
+				Serial.print(F("\nNFC Fault: "));
+				Serial.println(mfbyteIn522.GetStatusCodeName(status));
+			#endif
 
 			// Restart card sequence
 			NFC_State = READY_FOR_TAG;
@@ -224,8 +288,6 @@ void loop()
 				// Ensure UID is still the same
 				// Go straight back to writing what we last intended (don't recopy data from tag, in case it's wrong)
 		}
-
-		// dumpToUSBSerial();
 
 
 
@@ -294,23 +356,32 @@ void LoRa_RX()
 		LoRa_RecvBuffLen = RH_RF95_MAX_MESSAGE_LEN;
 		if (LoRa.recvfromAck(LoRa_RX_Buffer, LoRa_RecvBuffLen, &LoRa_msgFrom))
 		{
-			Serial.print(F("got request from : 0x"));
-			Serial.println(LoRa_msgFrom, HEX);
 
-			Serial.print(F("Received: "));
-			for (uint8_t i = 0; i < LoRa_RecvBuffLen; ++i)
-			{
-				Serial.print(F(" "));
-				Serial.print(LoRa_RX_Buffer[i], HEX);
-			}
-			Serial.println();
+
+			#ifdef debugMSG
+				Serial.print(F("got request from : 0x"));
+				Serial.println(LoRa_msgFrom, HEX);
+
+				Serial.print(F("Received: "));
+				for (uint8_t i = 0; i < LoRa_RecvBuffLen; ++i)
+				{
+					Serial.print(F(" "));
+					Serial.print(LoRa_RX_Buffer[i], HEX);
+				}
+				Serial.println();
+			#endif
 
 
 			newLoRaMessage = true;
 
 			// Send a VERY SHORT reply back to the originator client
 			if (!LoRa.sendtoWait(&LoRa_msgFrom, 1, LoRa_msgFrom))
-				Serial.println(F("sendtoWait failed"));
+			{
+				;
+				#ifdef debugMSG
+					Serial.println(F("sendtoWait failed"));
+				#endif
+			}
 		}
 	}
 
@@ -332,35 +403,48 @@ void LoRa_TX()
 		// Now wait for a reply from the server
 
 		// Print sent data
-		Serial.print(F("Sent: "));
-		for (uint8_t i = 0; i < LORA_BUFF_LEN; ++i)
-		{
-			Serial.print(F(" "));
-			Serial.print(LoRa_TX_Buffer[i], HEX);
-		}
-		Serial.println();
+		#ifdef debugMSG
+			Serial.print(F("Sent: "));
+			for (uint8_t i = 0; i < LORA_BUFF_LEN; ++i)
+			{
+				Serial.print(F(" "));
+				Serial.print(LoRa_TX_Buffer[i], HEX);
+			}
+			Serial.println();
+		#endif
 
 
 		LoRa_RecvBuffLen = RH_RF95_MAX_MESSAGE_LEN;  
 		if (LoRa.recvfromAckTimeout(LoRa_RX_Buffer, &LoRa_RecvBuffLen, 2000, &LoRa_msgFrom))
 		{
-			Serial.print(F("got reply from : 0x"));
-			Serial.println(LoRa_msgFrom, HEX);
+			;
+			#ifdef debugMSG
+				Serial.print(F("got reply from : 0x"));
+				Serial.println(LoRa_msgFrom, HEX);
 
 
-			Serial.print(F("Received: "));
-			for (uint8_t i = 0; i < LoRa_RecvBuffLen; ++i)
-			{
-				Serial.print(F(" "));
-				Serial.print(LoRa_RX_Buffer[i], HEX);
-			}
-			Serial.println();
+				Serial.print(F("Received: "));
+				for (uint8_t i = 0; i < LoRa_RecvBuffLen; ++i)
+				{
+					Serial.print(F(" "));
+					Serial.print(LoRa_RX_Buffer[i], HEX);
+				}
+				Serial.println();
+			#endif
 		}
 		else
-			Serial.println(F("No reply from master station?"));
+		{
+			#ifdef debugMSG
+				Serial.println(F("No reply from master station?"));
+			#endif
+		}
 	}
 	else
-		Serial.println(F("sendtoWait failed"));
+	{
+		#ifdef debugMSG
+			Serial.println(F("sendtoWait failed"));
+		#endif
+	}
 
 
 
@@ -372,7 +456,7 @@ void LoRa_TX()
 
 uint8_t getBattPercent()
 {
-	/* Returns battery percent as a byte
+	/* Returns battery pebyteInent as a byte
 			* 0 = 0%, 255 = 100%
 			* Setup to monitor a 3C lipo (0V = 9V, 100% = 12.6V)
 			* Voltage sensor scales voltages down by a factor of 5 via voltage divider
@@ -412,13 +496,13 @@ void Read_NTAG_Data()			// Used with PICC_TYPE_MIFARE_UL type
 		readLen = READLEN; 
 
 		// Get data from tag, starting from page 4 (user read/write section begins here)
-		status = mfrc522.MIFARE_Read(START_PAGE_ADDR + (BlockNum * 4), readBuffer, &readLen);
+		status = mfbyteIn522.MIFARE_Read(START_PAGE_ADDR + (BlockNum * 4), readBuffer, &readLen);
 
 		// Check reading was successful
 		if (status != MFRC522::STATUS_OK) 
 		{
 			Serial.print(F("\nReading failed: "));
-			Serial.println(mfrc522.GetStatusCodeName(status));
+			Serial.println(mfbyteIn522.GetStatusCodeName(status));
 			return;
 		}
 
@@ -435,13 +519,15 @@ void Write_NTAG_Data()				// Used with PICC_TYPE_MIFARE_UL type
 	// Writes DataBlock_W buffer to tag user memory
 
 	for (uint8_t page = 0; page < DATAROWS; ++page)
-		mfrc522.MIFARE_Ultralight_Write(page + 0x04, (Ptr_DataBlock_W + (page * DATACOLS)), 16);
+		mfbyteIn522.MIFARE_Ultralight_Write(page + 0x04, (Ptr_DataBlock_W + (page * DATACOLS)), 16);
 
 	// Check writing was successful
 	if (status != MFRC522::STATUS_OK) 
 	{
-		Serial.print(F("\nMIFARE_Write() failed: "));
-		Serial.println(mfrc522.GetStatusCodeName(status));
+		#ifdef debugMSG
+			Serial.print(F("\nMIFARE_Write() failed: "));
+			Serial.println(mfbyteIn522.GetStatusCodeName(status));
+		#endif
 	}
 
 	// Read data from the block (again, should now be what we have written)
@@ -458,11 +544,13 @@ bool Auth_1KTAG(uint8_t BlockNum)
 {
 	// Authenticates BlockNum of current tag - used with 1K cards
 	// Authenticate using key A. Return 'true' for success and 'false' for fail
-	status = mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, TRAILER_BLOCK + (BlockNum * 4), &key, &(mfrc522.uid));
+	status = mfbyteIn522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, TRAILER_BLOCK + (BlockNum * 4), &key, &(mfbyteIn522.uid));
 	if (status != MFRC522::STATUS_OK) 
 	{
-		Serial.print(F("\nPCD_Authenticate() failed: "));
-		Serial.println(mfrc522.GetStatusCodeName(status));
+		#ifdef debugMSG
+			Serial.print(F("\nPCD_Authenticate() failed: "));
+			Serial.println(mfbyteIn522.GetStatusCodeName(status));
+		#endif
 		return false;
 	}
 
@@ -481,13 +569,15 @@ void Read_1KTAG_Data()				// Used with PICC_TYPE_MIFARE_1K type
 		readLen = READLEN; 
 
 		// Get data from tag, starting from block 4 (user read/write section begins here)
-		status = mfrc522.MIFARE_Read(START_BLOCK_ADDR + (BlockNum * 4), readBuffer, &readLen);
+		status = mfbyteIn522.MIFARE_Read(START_BLOCK_ADDR + (BlockNum * 4), readBuffer, &readLen);
 
 		// Check reading was successful
 		if (status != MFRC522::STATUS_OK) 
 		{
-			Serial.print(F("\nReading failed: "));
-			Serial.println(mfrc522.GetStatusCodeName(status));
+			#ifdef debugMSG
+				Serial.print(F("\nReading failed: "));
+				Serial.println(mfbyteIn522.GetStatusCodeName(status));
+			#endif
 			return;
 		}
 
@@ -505,13 +595,15 @@ void Write_1KTAG_Data()				// Used with PICC_TYPE_MIFARE_1K type
 	// NOTE: ensure sectors used have been authenticated
 
 	for (uint8_t BlockNum = 0; BlockNum < (DATAROWS/8); ++BlockNum)
-		status = mfrc522.MIFARE_Write(START_BLOCK_ADDR + (BlockNum * 4), (Ptr_DataBlock_W + (BlockNum * 16)), 16);
+		status = mfbyteIn522.MIFARE_Write(START_BLOCK_ADDR + (BlockNum * 4), (Ptr_DataBlock_W + (BlockNum * 16)), 16);
 	
 	// Check writing was successful
 	if (status != MFRC522::STATUS_OK) 
 	{
-		Serial.print(F("\nMIFARE_Write() failed: "));
-		Serial.println(mfrc522.GetStatusCodeName(status));
+		#ifdef debugMSG
+			Serial.print(F("\nMIFARE_Write() failed: "));
+			Serial.println(mfbyteIn522.GetStatusCodeName(status));
+		#endif
 	}
 
 	// Read data from the block (again, should now be what we have written)
@@ -542,7 +634,9 @@ bool Compare_RW_Buffers()
 
 	if (count != TAG_DATA_SIZE) 
 	{
-		Serial.println(F("Error: r/w buffers don't match"));
+		#ifdef debugMSG
+			Serial.println(F("Error: r/w buffers don't match"));
+		#endif
 		return false;
 	}
 
@@ -557,45 +651,47 @@ void Copy_R2W_Buffer()
 	return;
 }
 
-void PrintDataBlock(uint8_t *buffer)
-{
-	// Print read data to console - HEX
-	Serial.print(F("Tag Data (HEX): "));
-	for (uint8_t i = 0; i < TAG_DATA_SIZE; ++i)
+#ifdef debugMSG
+	void PrintDataBlock(uint8_t *buffer)
 	{
-		Serial.print(*(buffer + i), HEX);
-		Serial.print(F(" "));
-	}		
-	Serial.println();
+		// Print read data to console - HEX
+		Serial.print(F("Tag Data (HEX): "));
+		for (uint8_t i = 0; i < TAG_DATA_SIZE; ++i)
+		{
+			Serial.print(*(buffer + i), HEX);
+			Serial.print(F(" "));
+		}		
+		Serial.println();
 
 
-	// Print read data to console - CHAR
-	Serial.print(F("Tag Data (CHAR): \""));
-	for (uint8_t i = 0; i < TAG_DATA_SIZE; ++i)
-		Serial.write(*(buffer + i));
+		// Print read data to console - CHAR
+		Serial.print(F("Tag Data (CHAR): \""));
+		for (uint8_t i = 0; i < TAG_DATA_SIZE; ++i)
+			Serial.write(*(buffer + i));
 
-	Serial.println(F("\""));
+		Serial.println(F("\""));
 
-	return;
-}
+		return;
+	}
+#endif
 
 void ReadTag()
 {
 	// Look for new cards
-	if ( ! mfrc522.PICC_IsNewCardPresent())
+	if ( ! mfbyteIn522.PICC_IsNewCardPresent())
 		return;
 	// Select one of the cards
-	if ( ! mfrc522.PICC_ReadCardSerial())
+	if ( ! mfbyteIn522.PICC_ReadCardSerial())
 		return;
 
 	// Only read tags we're setup to process
-	switch (mfrc522.PICC_GetType(mfrc522.uid.sak))
+	switch (mfbyteIn522.PICC_GetType(mfbyteIn522.uid.sak))
 	{
-		case mfrc522.PICC_TYPE_MIFARE_UL:			// NTAG sticker
+		case mfbyteIn522.PICC_TYPE_MIFARE_UL:			// NTAG sticker
 			Read_NTAG_Data();
 			break;
 
-		case mfrc522.PICC_TYPE_MIFARE_1K:			// Card/fob type
+		case mfbyteIn522.PICC_TYPE_MIFARE_1K:			// Card/fob type
 			Read_1KTAG_Data();
 			break;
 
@@ -616,13 +712,13 @@ void WriteTag()
 {
 	// Write DataBlock_W buffer to user memory on tags
 	// Only write tags we're setup to process
-	switch (mfrc522.PICC_GetType(mfrc522.uid.sak))
+	switch (mfbyteIn522.PICC_GetType(mfbyteIn522.uid.sak))
 	{
-		case mfrc522.PICC_TYPE_MIFARE_UL:			// NTAG sticker
+		case mfbyteIn522.PICC_TYPE_MIFARE_UL:			// NTAG sticker
 			Write_NTAG_Data();
 			break;
 
-		case mfrc522.PICC_TYPE_MIFARE_1K:			// Card/fob type
+		case mfbyteIn522.PICC_TYPE_MIFARE_1K:			// Card/fob type
 			Write_1KTAG_Data();
 			break;
 
@@ -642,11 +738,11 @@ void CloseTagComms()
 	// Puts tags into halt state
 
 	// Halt PICC - call once finished operations on current tag
-	mfrc522.PICC_HaltA();				// Instructs a PICC in state ACTIVE(*) to go to state HALT
+	mfbyteIn522.PICC_HaltA();				// Instructs a PICC in state ACTIVE(*) to go to state HALT
 
 	// Stop encryption
-	if (mfrc522.PICC_GetType(mfrc522.uid.sak) == mfrc522.PICC_TYPE_MIFARE_1K)
-		mfrc522.PCD_StopCrypto1();		// Call after communicating with the authenticated PICC
+	if (mfbyteIn522.PICC_GetType(mfbyteIn522.uid.sak) == mfbyteIn522.PICC_TYPE_MIFARE_1K)
+		mfbyteIn522.PCD_StopCrypto1();		// Call after communicating with the authenticated PICC
 
 	if (status == MFRC522::STATUS_OK) 
 		NFC_State = READY_FOR_TAG;
@@ -662,7 +758,9 @@ void ValidateTag()
 	if (memcmp(Ptr_DataBlock_R, validateCode, sizeof(validateCode)) == 0)
 	{
 		// Tag is valid
-		Serial.println(F("Tag Valid"));
+		#ifdef debugMSG
+			Serial.println(F("Tag Valid"));
+		#endif
 		NFC_State = TAG_VALID;
 		Copy_R2W_Buffer();
 	}
@@ -671,7 +769,10 @@ void ValidateTag()
 		// Tag is invalid
 		CloseTagComms();
 		NFC_State = READY_FOR_TAG;
-		Serial.println(F("Tag invalid"));
+
+		#ifdef debugMSG
+			Serial.println(F("Tag invalid"));
+		#endif
 	}
 
 	return;
@@ -688,11 +789,14 @@ void CheckUID()
 
 	
 	// Check last recorded UID first
-	if(memcmp((UID_Log + lastUIDRow * MAX_UID_LEN), mfrc522.uid.uidByte, mfrc522.uid.size) == 0)
+	if(memcmp((UID_Log + lastUIDRow * MAX_UID_LEN), mfbyteIn522.uid.uidByte, mfbyteIn522.uid.size) == 0)
 	{
 		// Card was the same as last tapped
 		// TODO - add timeout period (e.g. if tag was tapped a min later treat as new card)
-		Serial.println(F("RETAPPED"));
+		#ifdef debugMSG
+			Serial.println(F("RETAPPED"));
+		#endif
+
 		NFC_State = TAG_RETAPPED;
 		return;
 	}
@@ -703,7 +807,7 @@ void CheckUID()
 	// Check the rest of the recorded UIDs (if it wasn't last tag)
 	for (uint8_t i = 0; i < NUM_LOGGED_UIDS; ++i)
 	{
-		Similarity = memcmp((UID_Log + i * MAX_UID_LEN), mfrc522.uid.uidByte, mfrc522.uid.size);
+		Similarity = memcmp((UID_Log + i * MAX_UID_LEN), mfbyteIn522.uid.uidByte, mfbyteIn522.uid.size);
 
 		// Serial.print(F("Similarity = "));
 		// Serial.println(Similarity, DEC);		
@@ -718,8 +822,8 @@ void CheckUID()
 
 	for (uint8_t i = 0; i < MAX_UID_LEN; ++i)
 	{
-		if (i < mfrc522.uid.size)					// Record UID
-			UID_Log[lastUIDRow * MAX_UID_LEN + i] = mfrc522.uid.uidByte[i];
+		if (i < mfbyteIn522.uid.size)					// Record UID
+			UID_Log[lastUIDRow * MAX_UID_LEN + i] = mfbyteIn522.uid.uidByte[i];
 		else
 			UID_Log[lastUIDRow * MAX_UID_LEN + i] = ZERO; 		// fill the rest with zeroes
 	}
@@ -774,26 +878,41 @@ void ProcessTag()
 }
 
 
-void dumpToUSBSerial()
+void USBSerial_TX()
 {
 	// Dumps tag data to USB serial for master computer
 
 	// Start Block
-	for (uint8_t i = 0; i < 3; ++i)
-		Serial.write('#');
+	Serial.print(F("# "));
 	
-
 	// Message From
-	Serial.write(LoRa_msgFrom);
+	Serial.print(LoRa_msgFrom, DEC);
+	Serial.print(F(", "));
 
-	// Game mode
-	Serial.write(' ');
+	// Station State, Battery Level, UID
+	for (uint8_t i = 0; i < 12; ++i)
+	{
+		Serial.print(LoRa_RX_Buffer[i], DEC);
+		Serial.print(F(", "));		
+	}
+
+	// Card Type
+	Serial.print(LoRa_RX_Buffer[0], DEC);	// TODO - work out what the ref should be here
+	Serial.print(F(", "));		
+
+	// Team
+	Serial.print(LoRa_RX_Buffer[0], DEC);// TODO - work out what the ref should be here
+
+	// End block
+	Serial.print(F("~\n"));	
+
+	// 
 
 	/*
 	// LoRa_RX_Buffer
-			* Station state (game ID, mode, etc)
-			* Battery Level
-			* UID[MAX_UID_LEN]
+			* [0] Station state (game ID, mode, etc)
+			* [1] Battery Level
+			* [2-12] UID[MAX_UID_LEN]
 			* TAG_USER_DATA
 				* 'C21' (3x char)
 				* Card Type (char)
@@ -811,32 +930,72 @@ void dumpToUSBSerial()
 			* MISC (16x bytes)
 	*/
 
-	for (uint8_t i = 0; i < LORA_BUFF_LEN; ++i)
-		Serial.write(LoRa_RX_Buffer[i]);
+	// for (uint8_t i = 0; i < LORA_BUFF_LEN; ++i)
+	// 	Serial.write(LoRa_RX_Buffer[i]);
 
-	// End Block
-	for (uint8_t i = 0; i < 3; ++i)
-		Serial.write('~');
+	// // End Block
+	// for (uint8_t i = 0; i < 3; ++i)
+	// 	Serial.write('~');
 
-	// Newline
-	Serial.write('\n');
+	// // Newline
+	// Serial.write('\n');
 
 	return;
 }
 
-void getFromSerial()
+void USBSerial_RX()
 {
 	// Gets data from master computer and writes to transmit buffer to send out to stations
 
-	static uint8_t bytesReceived;
+	static uint8_t index = 0;
+	static uint8_t validCheck = 0;
+	static uint8_t loopNum = 0;
+	char byteIn;
+
+	// NOTE: newUSBSerial is set to true once a complete message has been received
+	// 		It should be set back to false once the message has been handled.
+
+	while (Serial.available() > 0 && newUSBSerial == false) 
+	{
+		// Serial.println(F("New byte!"));
+		byteIn = Serial.read();					// Read single character
+
+		loopNum++;
+
+		
+		if (validCheck >= sizeof(validateCode))			// STORE DATA (after doing checks below)
+		{
+			// Serial.print(F("ValidCheck = "));
+			// Serial.print(validCheck, DEC);
+
+			// Serial.print(F("\t index = "));
+			// Serial.print(index, DEC);
+
+			// Serial.print(F("\t loopNum = "));
+			// Serial.println(loopNum, DEC);
+			
+			if (index < sizeof(SerialINBuffer))
+				SerialINBuffer[index++] = byteIn;
+			else													// Once we've read the bytes we expect, reset
+			{
+				Serial.println(F("Message received!"));
+				// Reset
+				newUSBSerial = true;
+				loopNum = 0;
+				validCheck = 0;
+				index = 0;
+			}
+		}
+		else if (byteIn == validateCode[loopNum-1])	// Check for validateCode sequence
+			validCheck++;
+		else 														// Incorrect validateCode - restart checks
+		{
+			Serial.println(F("Incorrect validateCode"));
+			// Reset
+			loopNum = 0;
+			validCheck = 0;
+		}
+	}
 
 	return;
 }
-
-
-
-// TAG UID = 04 A1 83 7A A7 5E 80	
-
-
-// 2	1	0	FF	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	4	A1	83	7A	A7	5E	80	0	0	0	43	32	31	D	20
-

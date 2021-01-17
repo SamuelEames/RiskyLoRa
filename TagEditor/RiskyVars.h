@@ -8,10 +8,6 @@ enum NFC_State {READY_FOR_TAG, TAG_READ, TAG_VALID, TAG_RETAPPED, TAG_NEW, WAIT_
 // enum tribes {AETOS, ARKOUDA, ELAFI, FIDI, KEROS, LYKOS, TARI, TAVROS, NULLTRIBE};
 
 
-enum CashOperations {OP_add, OP_subtract, OP_multiply, OP_divide, OP_random, OP_set};
-
-
-
 
 
 // PIXEL LED COLOURS
