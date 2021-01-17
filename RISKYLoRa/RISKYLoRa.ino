@@ -54,9 +54,9 @@
 MFRC522 mfbyteIn522(NFC_SS, NFC_RST);				// Instanciate card reader driver
 MFRC522::StatusCode status;
 
-#define ZERO 		0x00
-#define DATAROWS	12
-#define DATACOLS	4
+#define ZERO 		0x00					// In case we want to change what zero is
+#define DATAROWS	4						// Number of user pages to read from NTAG
+#define DATACOLS	4						// Fixed to four
 const uint8_t TAG_DATA_SIZE = DATAROWS * DATACOLS;
 
 
@@ -76,9 +76,9 @@ uint8_t readBuffer[READLEN];			// Temporary buffer tag data is stored to during 
 #define START_BLOCK_ADDR 	0x04		// Initial block to read from (1K Cards)
 #define TRAILER_BLOCK   	0x07		// Used with 1K cards
 
-uint8_t NFC_State = READY_FOR_TAG;
+uint8_t NFC_State = READY_FOR_TAG;	// Used to track what stage of processing a tag we're in
 
-uint8_t validateCode[3] = {'C', '2', '1'};
+uint8_t validateCode[3] = {'C', '2', '1'};		// This is stored on all tags used within game
 
 #define MAX_UID_LEN 			10
 #define NUM_LOGGED_UIDS 	10
@@ -260,6 +260,7 @@ void loop()
 
 
 			// Send data over LoRa
+			LoRa_TX(SerialINBuffer[0]);
 
 
 			// Reset USBSerial flag
@@ -389,7 +390,7 @@ void LoRa_RX()
 }
 
 
-void LoRa_TX()
+void LoRa_TX(uint8_t toAddr)
 {
 	// Transmit LoRa message
 
@@ -398,7 +399,7 @@ void LoRa_TX()
 	LoRa_TX_Buffer[1] = getBattPercent();		// Get current battery level
 	
 
-	if (LoRa.sendtoWait(LoRa_TX_Buffer, LORA_BUFF_LEN, ADDR_MASTER))
+	if (LoRa.sendtoWait(LoRa_TX_Buffer, LORA_BUFF_LEN, toAddr))
 	{
 		// Now wait for a reply from the server
 
@@ -511,6 +512,8 @@ void Read_NTAG_Data()			// Used with PICC_TYPE_MIFARE_UL type
 			DataBlock_R[i + BlockNum * 16] = readBuffer[i];
 	}
 
+	PrintDataBlock(DataBlock_R);
+
 	return;
 }
 
@@ -559,7 +562,7 @@ bool Auth_1KTAG(uint8_t BlockNum)
 
 void Read_1KTAG_Data()				// Used with PICC_TYPE_MIFARE_1K type
 {
-	for (uint8_t BlockNum = 0; BlockNum < (DATAROWS/8); ++BlockNum)
+	for (uint8_t BlockNum = 0; BlockNum < (DATAROWS/4); ++BlockNum)
 	{
 		// Authenticate current working block
 		if(!Auth_1KTAG(BlockNum))
@@ -585,6 +588,9 @@ void Read_1KTAG_Data()				// Used with PICC_TYPE_MIFARE_1K type
 		for (uint8_t i = 0; i < 16; ++i)
 			DataBlock_R[i + BlockNum * 16] = readBuffer[i];
 	}
+
+
+	PrintDataBlock(DataBlock_R);
 
 	return;
 }
@@ -861,7 +867,7 @@ void ProcessTag()
 	memcpy( (LoRa_TX_Buffer + STATION_DATA_LEN + MAX_UID_LEN), DataBlock_R, TAG_DATA_SIZE);
 
 	// Transmit the things
-	LoRa_TX();
+	LoRa_TX(ADDR_MASTER);
 
 
 	// Wait for response
