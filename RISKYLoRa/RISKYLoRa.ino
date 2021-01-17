@@ -13,7 +13,7 @@
 #include <SPI.h>						// NFC Reader
 #include <MFRC522.h>					// NFC Reader
 #include <EEPROM.h>					// EEPROM used to store (this) station ID
-#include <avr/sleep.h>				// Just go to sleep if there's an error
+// #include <avr/sleep.h>				// Just go to sleep if there's an error
 
 
 // // #include <SPI.h>
@@ -85,10 +85,44 @@ uint8_t validateCode[3] = {'C', '2', '1'};		// This is stored on all tags used w
 uint8_t UID_Log[MAX_UID_LEN * NUM_LOGGED_UIDS];	// Stores the UIDs of the last NUM_LOGGED_UIDS cards logged
 uint8_t lastUIDRow = 0;									// Row into which UID of last valid tag was stored
 
+// Positions in LoRa_RX_Buffer for this info
+#define TAGDATA_TYPE			3			
+#define TAGDATA_TEAM			4
+#define TAGDATA_POINTS		5							// Actually just used to set LEDs on stations - nothing to do with tags
+
 
 // PIXEL SETUP
-#define NUM_LEDS 			24
+#define NUM_LEDS 				24
 CRGB leds[NUM_LEDS];									// Instanciate pixel driver
+const uint8_t TeamCols[25][2] = { 	{1, 1}, 			// Team colour combinations
+												{2, 2},
+												{3, 3},
+												{4, 4},
+												{5, 5},
+												{1, 2},
+												{2, 3},
+												{3, 4},
+												{4, 5},
+												{5, 1},
+												{1, 3},
+												{2, 4},
+												{3, 5},
+												{4, 1},
+												{5, 2},
+												{1, 4},
+												{2, 5},
+												{3, 1},
+												{4, 2},
+												{5, 3},
+												{1, 5},
+												{2, 1},
+												{3, 2},
+												{4, 3},
+												{5, 4} 	};
+
+
+uint8_t LED_Team = 0;
+uint8_t LED_Fill = 0;
 
 
 
@@ -96,7 +130,7 @@ CRGB leds[NUM_LEDS];									// Instanciate pixel driver
 // LORA SETUP
 #define RF95_FREQ 915.0
 
-#define ADDR_MASTER 	21							// Address of master station
+#define ADDR_MASTER 	48							// Address of master station
 
 RH_RF95 rf95(RFM95_CS, RFM95_INT);				// Instanciate a LoRa driver
 RHReliableDatagram LoRa(rf95, EEPROM.read(0));
@@ -122,7 +156,7 @@ bool newLoRaMessage = false;
 
 
 // SERIAL SETUP
-uint8_t SerialINBuffer[5]; 						// Size indicates number of data bytes we want (ignoring validateCode bytes)
+uint8_t USB_RX_Buffer[5]; 						// Size indicates number of data bytes we want (ignoring validateCode bytes)
 bool newUSBSerial = false;
 
 
@@ -237,6 +271,7 @@ void setup()
 
 void loop()
 {
+	
 	LoRa_RX();
 
 
@@ -258,9 +293,18 @@ void loop()
 		{
 			// Copy USB Data to LoRa_TX buffer
 
+			// Station desired state
+			LoRa_TX_Buffer[0] = USB_RX_Buffer[2];
+
+			// Station Team
+			LoRa_TX_Buffer[STATION_DATA_LEN + MAX_UID_LEN + TAGDATA_TEAM] = USB_RX_Buffer[3];
+
+			// Station points
+			LoRa_TX_Buffer[STATION_DATA_LEN + MAX_UID_LEN + TAGDATA_POINTS] = USB_RX_Buffer[4];
+
 
 			// Send data over LoRa
-			LoRa_TX(SerialINBuffer[0]);
+			LoRa_TX(USB_RX_Buffer[1]);
 
 
 			// Reset USBSerial flag
@@ -271,6 +315,18 @@ void loop()
 	else
 	{
 		// SLAVE STATIONS
+		if (newLoRaMessage)
+		{
+			// Update LED status
+			LED_Team = LoRa_RX_Buffer[STATION_DATA_LEN + MAX_UID_LEN + TAGDATA_TEAM] - 65;
+			LED_Fill = LoRa_RX_Buffer[STATION_DATA_LEN + MAX_UID_LEN + TAGDATA_POINTS] - 64;
+
+			newLoRaMessage = false;
+
+			UpdateLEDs();
+		}
+
+
 
 		// Handle NFC errors
 		if (status != MFRC522::STATUS_OK) 
@@ -336,15 +392,15 @@ void loop()
 }
 
 
-void stop()
-{
-	// Stop code execution if we run into an error we can't recover from
-	set_sleep_mode (SLEEP_MODE_PWR_DOWN);  
-	sleep_enable();
-	sleep_cpu ();  
+// void stop()
+// {
+// 	// Stop code execution if we run into an error we can't recover from
+// 	set_sleep_mode (SLEEP_MODE_PWR_DOWN);  
+// 	sleep_enable();
+// 	sleep_cpu ();  
 
-	return;
-}
+// 	return;
+// }
 
 
 
@@ -360,8 +416,8 @@ void LoRa_RX()
 
 
 			#ifdef debugMSG
-				Serial.print(F("got request from : 0x"));
-				Serial.println(LoRa_msgFrom, HEX);
+				Serial.print(F("got request from : "));
+				Serial.println(LoRa_msgFrom, DEC);
 
 				Serial.print(F("Received: "));
 				for (uint8_t i = 0; i < LoRa_RecvBuffLen; ++i)
@@ -420,8 +476,8 @@ void LoRa_TX(uint8_t toAddr)
 		{
 			;
 			#ifdef debugMSG
-				Serial.print(F("got reply from : 0x"));
-				Serial.println(LoRa_msgFrom, HEX);
+				Serial.print(F("got reply from : "));
+				Serial.println(LoRa_msgFrom, DEC);
 
 
 				Serial.print(F("Received: "));
@@ -896,21 +952,21 @@ void USBSerial_TX()
 	Serial.print(F(", "));
 
 	// Station State, Battery Level, UID
-	for (uint8_t i = 0; i < 12; ++i)
+	for (uint8_t i = 0; i < (STATION_DATA_LEN + MAX_UID_LEN); ++i)
 	{
-		Serial.print(LoRa_RX_Buffer[i], DEC);
+		Serial.print(LoRa_RX_Buffer[i], HEX);
 		Serial.print(F(", "));		
 	}
 
 	// Card Type
-	Serial.print(LoRa_RX_Buffer[0], DEC);	// TODO - work out what the ref should be here
+	Serial.print(LoRa_RX_Buffer[STATION_DATA_LEN + MAX_UID_LEN + TAGDATA_TYPE], HEX);
 	Serial.print(F(", "));		
 
 	// Team
-	Serial.print(LoRa_RX_Buffer[0], DEC);// TODO - work out what the ref should be here
+	Serial.print(LoRa_RX_Buffer[STATION_DATA_LEN + MAX_UID_LEN + TAGDATA_TEAM], HEX);
 
 	// End block
-	Serial.print(F("~\n"));	
+	Serial.print(F(", ~\n"));	
 
 	// 
 
@@ -980,8 +1036,8 @@ void USBSerial_RX()
 			// Serial.print(F("\t loopNum = "));
 			// Serial.println(loopNum, DEC);
 			
-			if (index < sizeof(SerialINBuffer))
-				SerialINBuffer[index++] = byteIn;
+			if (index < sizeof(USB_RX_Buffer))
+				USB_RX_Buffer[index++] = byteIn;
 			else													// Once we've read the bytes we expect, reset
 			{
 				Serial.println(F("Message received!"));
@@ -1004,4 +1060,64 @@ void USBSerial_RX()
 	}
 
 	return;
+}
+
+
+
+void UpdateLEDs()
+{
+	// Updates LEDs
+
+	if (LED_Fill > NUM_LEDS)
+		LED_Fill = NUM_LEDS;
+
+	fill_solid(leds, NUM_LEDS, COL_BLACK);
+
+
+
+	for (uint8_t i = 0; i < LED_Fill; ++i)
+	{
+		if (i < LED_Fill/2)
+			leds[i] = getColour(TeamCols[LED_Team][0]);
+		else
+			leds[i] = getColour(TeamCols[LED_Team][1]);
+	}
+
+
+	FastLED.show();
+
+	return;
+}
+
+
+
+
+unsigned long getColour(uint8_t colNumber)	// Return colour of given tribe tribe
+{
+	switch (colNumber) 
+	{
+		case 0:
+			return COL_BLACK;
+			break;
+		case 1:
+			return COL_RED;
+			break;
+		case 2:
+			return COL_YELLOW;
+			break;
+		case 3:
+			return COL_GREEN;
+			break;
+		case 4:
+			return COL_BLUE;
+			break;
+		case 5:
+			return COL_MAGENTA;
+			break;
+								
+		default:
+			break;
+	}
+
+	return COL_BLACK;
 }
