@@ -2,7 +2,7 @@
 #include <avr/sleep.h>	
 
 // change this to be the ID of your node in the mesh network
-uint8_t myID = 48;
+uint8_t myID = 50;
 
 /* Node IDs
 

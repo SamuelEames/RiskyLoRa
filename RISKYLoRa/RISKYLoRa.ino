@@ -319,7 +319,7 @@ void loop()
 		{
 			// Update LED status
 			LED_Team = LoRa_RX_Buffer[STATION_DATA_LEN + MAX_UID_LEN + TAGDATA_TEAM] - 65;
-			LED_Fill = LoRa_RX_Buffer[STATION_DATA_LEN + MAX_UID_LEN + TAGDATA_POINTS] - 64;
+			LED_Fill = LoRa_RX_Buffer[STATION_DATA_LEN + MAX_UID_LEN + TAGDATA_POINTS] - 65;
 
 			newLoRaMessage = false;
 
@@ -568,7 +568,7 @@ void Read_NTAG_Data()			// Used with PICC_TYPE_MIFARE_UL type
 			DataBlock_R[i + BlockNum * 16] = readBuffer[i];
 	}
 
-	PrintDataBlock(DataBlock_R);
+//	PrintDataBlock(DataBlock_R);
 
 	return;
 }
@@ -646,7 +646,7 @@ void Read_1KTAG_Data()				// Used with PICC_TYPE_MIFARE_1K type
 	}
 
 
-	PrintDataBlock(DataBlock_R);
+//	PrintDataBlock(DataBlock_R);
 
 	return;
 }
@@ -946,27 +946,41 @@ void USBSerial_TX()
 
 	// Start Block
 	Serial.print(F("# "));
+
+	// Message Type
+	Serial.print('T');			// Send letter TODO - implenent 'S' type message
+	Serial.print(F(", "));
 	
 	// Message From
-	Serial.print(LoRa_msgFrom, DEC);
+	Serial.write(LoRa_msgFrom); // Send Letter
 	Serial.print(F(", "));
 
-	// Station State, Battery Level, UID
-	for (uint8_t i = 0; i < (STATION_DATA_LEN + MAX_UID_LEN); ++i)
+	// -don't send station state-, Battery Level, UID
+	Serial.print(LoRa_RX_Buffer[1], DEC); // Send battery level as base 10
+	Serial.print(F(", "));
+
+	// Send UID as bunched up HEX chars
+	for (uint8_t i = STATION_DATA_LEN; i < (STATION_DATA_LEN + MAX_UID_LEN); ++i)
 	{
+		// Add leading '0' for Hex values less than 0x10
+		if (LoRa_RX_Buffer[i]<0x10)
+			Serial.print("0");
+
+		// Print hex value
 		Serial.print(LoRa_RX_Buffer[i], HEX);
-		Serial.print(F(", "));		
 	}
 
-	// Card Type
-	Serial.print(LoRa_RX_Buffer[STATION_DATA_LEN + MAX_UID_LEN + TAGDATA_TYPE], HEX);
-	Serial.print(F(", "));		
+	Serial.print(F(", "));	
+
+	// Card Type - not essential
+	Serial.write(LoRa_RX_Buffer[STATION_DATA_LEN + MAX_UID_LEN + TAGDATA_TYPE]);
+	Serial.print(F(", "));
 
 	// Team
-	Serial.print(LoRa_RX_Buffer[STATION_DATA_LEN + MAX_UID_LEN + TAGDATA_TEAM], HEX);
+	Serial.write(LoRa_RX_Buffer[STATION_DATA_LEN + MAX_UID_LEN + TAGDATA_TEAM]);
 
 	// End block
-	Serial.print(F(", ~\n"));	
+	Serial.print(F("\n"));	
 
 	// 
 
@@ -1037,16 +1051,29 @@ void USBSerial_RX()
 			// Serial.println(loopNum, DEC);
 			
 			if (index < sizeof(USB_RX_Buffer))
-				USB_RX_Buffer[index++] = byteIn;
-			else													// Once we've read the bytes we expect, reset
 			{
-				Serial.println(F("Message received!"));
-				// Reset
-				newUSBSerial = true;
-				loopNum = 0;
-				validCheck = 0;
-				index = 0;
+				USB_RX_Buffer[index++] = byteIn;
+
+				// Reset as soon as we've received a full message
+				if (index == sizeof(USB_RX_Buffer))
+				{
+					// Reset
+					Serial.println(F("Message received!"));
+					newUSBSerial = true;
+					loopNum = 0;
+					validCheck = 0;
+					index = 0;
+				}
 			}
+			// else													// Once we've read the bytes we expect, reset
+			// {
+				
+			// 	// Reset
+			// 	newUSBSerial = true;
+			// 	loopNum = 0;
+			// 	validCheck = 0;
+			// 	index = 0;
+			// }
 		}
 		else if (byteIn == validateCode[loopNum-1])	// Check for validateCode sequence
 			validCheck++;
