@@ -21,7 +21,7 @@
 // #include <Adafruit_GFX.h>
 // #include <Adafruit_SH1106.h>
 
-#define debugMSG	1
+// #define debugMSG	1
 
 // #define OLED_RESET 1
 // Adafruit_SH1106 display(OLED_RESET);
@@ -92,7 +92,7 @@ uint8_t lastUIDRow = 0;									// Row into which UID of last valid tag was stor
 
 
 // PIXEL SETUP
-#define NUM_LEDS 				24
+#define NUM_LEDS 				25
 CRGB leds[NUM_LEDS];									// Instanciate pixel driver
 const uint8_t TeamCols[25][2] = { 	{1, 1}, 			// Team colour combinations
 												{2, 2},
@@ -179,10 +179,15 @@ bool newUSBSerial = false;
 
 void setup()
 {
+	delay(500);
 	if (EEPROM.read(0) == ADDR_MASTER)
 		ImTheMaster = true;
 	else
 		ImTheMaster = false;
+
+	// Buzzer setup
+	pinMode(BUZZ_PIN, OUTPUT);
+	digitalWrite(BUZZ_PIN, HIGH);
 
 
 	// PIXEL SETUP
@@ -217,6 +222,16 @@ void setup()
 		#endif	
 		// Just go to sleep
 		// stop();
+
+		// Make a little noise
+		digitalWrite(BUZZ_PIN, LOW);
+		delay(50);
+		digitalWrite(BUZZ_PIN, HIGH);
+		delay(50);
+		digitalWrite(BUZZ_PIN, LOW);
+		delay(50);
+		digitalWrite(BUZZ_PIN, HIGH);
+		delay(500);
 	}
 
 	rf95.setFrequency(RF95_FREQ);
@@ -239,7 +254,7 @@ void setup()
 	// if (!ImTheMaster) 	// Master station doesn't have card reader, so don't bother setting it up
 	// {
 	// CARD READER SETUP
-	mfbyteIn522.PCD_Init();					// Init MFRC522 reader
+	mfbyteIn522.PCD_Init();
 
 	Ptr_DataBlock_R = &DataBlock_R[0];	
 	Ptr_DataBlock_W = &DataBlock_W[0];	
@@ -253,8 +268,7 @@ void setup()
 	fill_solid(leds, NUM_LEDS, CRGB::Green);
 	FastLED.show();
 
-	// Buzzer setup
-	pinMode(BUZZ_PIN, OUTPUT);
+
 
 	// Make a little noise
 	digitalWrite(BUZZ_PIN, LOW);
